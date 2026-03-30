@@ -387,4 +387,10 @@ app.get('*', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`✓ Segunda Chamada PCont II rodando na porta ${PORT}`));
+app.listen(PORT, () => {
+  const adm = determineAdminPassword();
+  const hint = adm.slice(0, 4) + '*'.repeat(Math.max(0, adm.length - 4));
+  console.log(`✓ Segunda Prova PAdm II rodando na porta ${PORT}`);
+  console.log(`🔑 Senha admin (hint): ${hint}  |  fonte: ${process.env.ADMIN_PASSWORD ? 'ADMIN_PASSWORD' : (process.env.DATABASE_URL ? 'DATABASE_URL' : 'hardcoded')}`);
+  console.log(`   → Para definir uma senha própria, adicione ADMIN_PASSWORD nas variáveis do Railway.`);
+});
