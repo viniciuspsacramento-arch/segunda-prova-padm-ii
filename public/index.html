@@ -418,12 +418,12 @@ async function iniciarProva() {
     S.tentativaId = data.id;
     S.provaId     = data.prova_id;
     S.provaInfo   = data;
-    S.segundosRestantes = (data.tempo_limite || 90) * 60;
+    S.segundosRestantes = (data.tempo_limite || 120) * 60;
 
     // Tela de instruções
     document.getElementById('titulo-instrucoes').textContent    = '2ª Avaliação — Estatística II';
     document.getElementById('subtitulo-instrucoes').textContent = `Aluno: ${nome} · Matrícula: ${matricula}`;
-    document.getElementById('tempo-instrucao').textContent      = `${data.tempo_limite || 90} minutos`;
+    document.getElementById('tempo-instrucao').textContent      = `${data.tempo_limite || 120} minutos`;
 
     trocarTela('tela-instrucoes');
   } catch(e) {

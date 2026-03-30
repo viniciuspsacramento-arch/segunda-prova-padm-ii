@@ -90,7 +90,7 @@ app.post('/api/tentativas', async (req, res) => {
       id:           tentativaId,
       prova_id:     prova.id,
       prova_titulo: tituloPublico,
-      tempo_limite: prova.tempo_limite || 90,
+      tempo_limite: prova.tempo_limite || 120,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
