@@ -152,8 +152,10 @@
             <div class="title">Painel — 2ª Avaliação</div>
             <div id="ultima-atualizacao" class="muted">Atualização: --</div>
           </div>
-          <div style="display:flex;gap:8px;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <button id="btn-refresh" class="secondary">Atualizar</button>
+            <button id="btn-enviar-todos" class="success">Enviar para todos</button>
+            <button id="btn-excluir-todos" class="danger">Excluir todos</button>
             <button id="btn-sair" class="secondary">Sair</button>
           </div>
         </div>
@@ -240,6 +242,27 @@
         throw new Error(msg);
       }
       return r.json();
+    }
+
+    async function apiPost(path, bodyObj) {
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: { 'x-admin-password': S.senha, 'Content-Type': 'application/json' },
+        body: bodyObj ? JSON.stringify(bodyObj) : '{}'
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Erro na requisição.');
+      return j;
+    }
+
+    async function apiDelete(path) {
+      const r = await fetch(path, {
+        method: 'DELETE',
+        headers: { 'x-admin-password': S.senha }
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || 'Erro na requisição.');
+      return j;
     }
 
     function renderTabela() {
@@ -403,6 +426,51 @@
         await carregar();
       } catch (e) {
         alert(`Erro ao atualizar: ${e.message}`);
+      }
+    };
+
+    document.getElementById('btn-enviar-todos').onclick = async () => {
+      if (!confirm('Enviar resultado por e-mail para todas as provas finalizadas que tenham e-mail cadastrado?\n\n(São todos os registros desta avaliação no banco, não só os filtrados na tela.)')) return;
+      const btn = document.getElementById('btn-enviar-todos');
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = 'Enviando…';
+      try {
+        const j = await apiPost('/api/admin/tentativas/enviar-todos');
+        let msg = `Concluído.\nEnviados: ${j.enviados} de ${j.total}.\nFalhas: ${j.falhas}.`;
+        if (j.detalhes_falhas && j.detalhes_falhas.length) {
+          msg += '\n\nFalhas:\n' + j.detalhes_falhas.map(f => `#${f.id}: ${f.error}`).join('\n');
+        }
+        alert(msg);
+        await carregar();
+      } catch (e) {
+        alert(`Erro: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = old;
+      }
+    };
+
+    document.getElementById('btn-excluir-todos').onclick = async () => {
+      if (!confirm('ATENÇÃO: apaga TODAS as tentativas e respostas desta prova no banco. Não dá para desfazer.\n\nConfirma o primeiro passo?')) return;
+      const conf = prompt('Digite EXCLUIR (em maiúsculas) para confirmar:');
+      if (conf !== 'EXCLUIR') {
+        alert('Cancelado.');
+        return;
+      }
+      const btn = document.getElementById('btn-excluir-todos');
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = 'Excluindo…';
+      try {
+        const j = await apiDelete('/api/admin/tentativas/todos');
+        alert(`Excluídas ${j.excluidas} tentativa(s).`);
+        await carregar();
+      } catch (e) {
+        alert(`Erro: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = old;
       }
     };
 

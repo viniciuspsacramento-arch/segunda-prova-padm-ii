@@ -411,15 +411,194 @@ app.get('/api/admin/tentativas/:id', requireAdmin, async (req, res) => {
   }
 });
 
+function httpErr(status, msg) {
+  const e = new Error(msg);
+  e.status = status;
+  return e;
+}
+
+/** Envia e-mail com resultado; retorna { email }. Lança Error com .status */
+async function enviarResultadoEmailPorTentativaId(tentId) {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) {
+    throw httpErr(500, 'RESEND_API_KEY não configurado. Adicione nas variáveis de ambiente do Railway.');
+  }
+
+  const [[tentativa]] = await db().query(
+    `SELECT t.id, t.nome_aluno, t.matricula, t.email, t.pontuacao,
+            t.iniciado_em, t.finalizado_em, t.prova_id,
+            COALESCE(p.titulo_publico, p.titulo) AS prova_titulo
+     FROM tentativas t JOIN provas p ON p.id = t.prova_id
+     WHERE t.id = ? AND p.titulo LIKE ?`,
+    [tentId, FILTRO]
+  );
+  if (!tentativa) throw httpErr(404, 'Tentativa não encontrada.');
+  if (!tentativa.email || !String(tentativa.email).includes('@')) {
+    throw httpErr(400, 'Aluno sem e-mail cadastrado.');
+  }
+  if (!tentativa.finalizado_em) {
+    throw httpErr(400, 'Prova ainda não finalizada.');
+  }
+
+  const [respostas] = await db().query(
+    `SELECT pq.ordem, q.enunciado,
+            a_resp.texto AS resposta_dada, a_resp.correta AS acertou,
+            a_cert.texto AS resposta_correta, pq.valor_questao
+     FROM respostas r
+     JOIN tentativas t ON t.id = r.tentativa_id
+     JOIN provas_questoes pq ON pq.prova_id = t.prova_id AND pq.questao_id = r.questao_id
+     JOIN questoes q ON q.id = r.questao_id
+     JOIN alternativas a_resp ON a_resp.id = r.alternativa_id
+     JOIN alternativas a_cert ON a_cert.questao_id = r.questao_id AND a_cert.correta = 1
+     WHERE r.tentativa_id = ?
+     ORDER BY pq.ordem`,
+    [tentId]
+  );
+
+  const total = respostas.length;
+  const corretas = respostas.filter(r => !!r.acertou).length;
+  const percentual = total > 0 ? ((corretas / total) * 100).toFixed(1) : '0.0';
+
+  function esc(v) {
+    return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function fmtBr(v) {
+    if (!v) return '-';
+    return new Date(v).toLocaleString('pt-BR');
+  }
+
+  const rows = respostas.map((r, i) => {
+    const cor = r.acertou ? '#166534' : '#991b1b';
+    const ico = r.acertou ? '✅ Correta' : '❌ Incorreta';
+    return `<tr>
+      <td style="padding:8px;border:1px solid #ddd">${i + 1}</td>
+      <td style="padding:8px;border:1px solid #ddd">${esc(r.resposta_dada || 'Não respondida')}</td>
+      <td style="padding:8px;border:1px solid #ddd">${esc(r.resposta_correta)}</td>
+      <td style="padding:8px;border:1px solid #ddd;color:${cor};font-weight:700">${ico}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `
+  <div style="font-family:Arial,sans-serif;color:#111827;line-height:1.5;">
+    <h2 style="margin:0 0 12px">Resultado — 2ª Avaliação — Estatística II</h2>
+    <p><strong>Aluno:</strong> ${esc(tentativa.nome_aluno)}</p>
+    <p><strong>Matrícula:</strong> ${esc(tentativa.matricula)}</p>
+    <p><strong>Início:</strong> ${esc(fmtBr(tentativa.iniciado_em))}</p>
+    <p><strong>Finalização:</strong> ${esc(fmtBr(tentativa.finalizado_em))}</p>
+    <p><strong>Pontuação:</strong> ${esc(tentativa.pontuacao)}%</p>
+    <p><strong>Acertos:</strong> ${corretas}/${total} (${percentual}%)</p>
+    <hr style="margin:16px 0">
+    <h3 style="margin:0 0 8px">Respostas</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#f3f4f6">
+        <th style="padding:8px;border:1px solid #ddd">#</th>
+        <th style="padding:8px;border:1px solid #ddd">Resposta do aluno</th>
+        <th style="padding:8px;border:1px solid #ddd">Gabarito</th>
+        <th style="padding:8px;border:1px solid #ddd">Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <hr style="margin:16px 0">
+    <p style="color:#64748b;font-size:12px">Universidade Federal do Cariri · Prof. Vinicius Sacramento</p>
+  </div>`;
+
+  const emailResp = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${resendKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: 'Prova Estatística II <onboarding@resend.dev>',
+      to: tentativa.email.trim(),
+      reply_to: 'vinicius.sacramento@ufca.edu.br',
+      subject: `Resultado — 2ª Avaliação — Estatística II — ${tentativa.nome_aluno}`,
+      html,
+    }),
+  });
+
+  const emailResult = await emailResp.json();
+  if (!emailResp.ok) {
+    throw new Error(emailResult.message || JSON.stringify(emailResult));
+  }
+
+  return { email: tentativa.email };
+}
+
+// ─── POST /api/admin/tentativas/enviar-todos (antes de /:id) ──────────────────
+app.post('/api/admin/tentativas/enviar-todos', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db().query(
+      `SELECT t.id FROM tentativas t
+       JOIN provas p ON p.id = t.prova_id
+       WHERE p.titulo LIKE ?
+         AND t.finalizado_em IS NOT NULL
+         AND TRIM(COALESCE(t.email,'')) <> ''
+         AND t.email LIKE '%@%'
+       ORDER BY t.id`,
+      [FILTRO]
+    );
+    const ids = rows.map(r => r.id);
+    const enviados = [];
+    const falhas = [];
+    const delay = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const { email } = await enviarResultadoEmailPorTentativaId(ids[i]);
+        enviados.push({ id: ids[i], email });
+      } catch (err) {
+        falhas.push({ id: ids[i], error: err.message });
+      }
+      if (i < ids.length - 1) await delay(400);
+    }
+    res.json({
+      ok: true,
+      total: ids.length,
+      enviados: enviados.length,
+      falhas: falhas.length,
+      detalhes_enviados: enviados,
+      detalhes_falhas: falhas,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── DELETE /api/admin/tentativas/todos (antes de /:id) ───────────────────────
+app.delete('/api/admin/tentativas/todos', requireAdmin, async (req, res) => {
+  try {
+    await db().query(
+      `DELETE r FROM respostas r
+       INNER JOIN tentativas t ON t.id = r.tentativa_id
+       INNER JOIN provas p ON p.id = t.prova_id
+       WHERE p.titulo LIKE ?`,
+      [FILTRO]
+    );
+    const [result] = await db().query(
+      `DELETE t FROM tentativas t
+       INNER JOIN provas p ON p.id = t.prova_id
+       WHERE p.titulo LIKE ?`,
+      [FILTRO]
+    );
+    res.json({ ok: true, excluidas: result.affectedRows || 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── DELETE /api/admin/tentativas/:id — excluir tentativa ─────────────────────
 app.delete('/api/admin/tentativas/:id', requireAdmin, async (req, res) => {
   const tentId = req.params.id;
   try {
+    const [[row]] = await db().query(
+      `SELECT t.id FROM tentativas t
+       JOIN provas p ON p.id = t.prova_id
+       WHERE t.id = ? AND p.titulo LIKE ?`,
+      [tentId, FILTRO]
+    );
+    if (!row) return res.status(404).json({ error: 'Tentativa não encontrada.' });
     await db().query('DELETE FROM respostas WHERE tentativa_id = ?', [tentId]);
-    const [result] = await db().query('DELETE FROM tentativas WHERE id = ?', [tentId]);
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Tentativa não encontrada.' });
-    }
+    await db().query('DELETE FROM tentativas WHERE id = ?', [tentId]);
     res.json({ ok: true, message: `Tentativa #${tentId} excluída.` });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -428,115 +607,12 @@ app.delete('/api/admin/tentativas/:id', requireAdmin, async (req, res) => {
 
 // ─── POST /api/admin/tentativas/:id/enviar — enviar resultado por e-mail ─────
 app.post('/api/admin/tentativas/:id/enviar', requireAdmin, async (req, res) => {
-  const tentId = req.params.id;
   try {
-    const [[tentativa]] = await db().query(
-      `SELECT t.id, t.nome_aluno, t.matricula, t.email, t.pontuacao,
-              t.iniciado_em, t.finalizado_em, t.prova_id,
-              COALESCE(p.titulo_publico, p.titulo) AS prova_titulo
-       FROM tentativas t JOIN provas p ON p.id = t.prova_id
-       WHERE t.id = ?`,
-      [tentId]
-    );
-    if (!tentativa) return res.status(404).json({ error: 'Tentativa não encontrada.' });
-    if (!tentativa.email || !tentativa.email.includes('@')) {
-      return res.status(400).json({ error: 'Aluno sem e-mail cadastrado.' });
-    }
-    if (!tentativa.finalizado_em) {
-      return res.status(400).json({ error: 'Prova ainda não finalizada.' });
-    }
-
-    const resendKey = process.env.RESEND_API_KEY;
-    if (!resendKey) {
-      return res.status(500).json({ error: 'RESEND_API_KEY não configurado. Adicione nas variáveis de ambiente do Railway.' });
-    }
-
-    const [respostas] = await db().query(
-      `SELECT pq.ordem, q.enunciado,
-              a_resp.texto AS resposta_dada, a_resp.correta AS acertou,
-              a_cert.texto AS resposta_correta, pq.valor_questao
-       FROM respostas r
-       JOIN tentativas t ON t.id = r.tentativa_id
-       JOIN provas_questoes pq ON pq.prova_id = t.prova_id AND pq.questao_id = r.questao_id
-       JOIN questoes q ON q.id = r.questao_id
-       JOIN alternativas a_resp ON a_resp.id = r.alternativa_id
-       JOIN alternativas a_cert ON a_cert.questao_id = r.questao_id AND a_cert.correta = 1
-       WHERE r.tentativa_id = ?
-       ORDER BY pq.ordem`,
-      [tentId]
-    );
-
-    const total = respostas.length;
-    const corretas = respostas.filter(r => !!r.acertou).length;
-    const percentual = total > 0 ? ((corretas / total) * 100).toFixed(1) : '0.0';
-
-    function esc(v) {
-      return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-    function fmtBr(v) {
-      if (!v) return '-';
-      return new Date(v).toLocaleString('pt-BR');
-    }
-
-    const rows = respostas.map((r, i) => {
-      const cor = r.acertou ? '#166534' : '#991b1b';
-      const ico = r.acertou ? '✅ Correta' : '❌ Incorreta';
-      return `<tr>
-        <td style="padding:8px;border:1px solid #ddd">${i + 1}</td>
-        <td style="padding:8px;border:1px solid #ddd">${esc(r.resposta_dada || 'Não respondida')}</td>
-        <td style="padding:8px;border:1px solid #ddd">${esc(r.resposta_correta)}</td>
-        <td style="padding:8px;border:1px solid #ddd;color:${cor};font-weight:700">${ico}</td>
-      </tr>`;
-    }).join('');
-
-    const html = `
-    <div style="font-family:Arial,sans-serif;color:#111827;line-height:1.5;">
-      <h2 style="margin:0 0 12px">Resultado — 2ª Avaliação — Estatística II</h2>
-      <p><strong>Aluno:</strong> ${esc(tentativa.nome_aluno)}</p>
-      <p><strong>Matrícula:</strong> ${esc(tentativa.matricula)}</p>
-      <p><strong>Início:</strong> ${esc(fmtBr(tentativa.iniciado_em))}</p>
-      <p><strong>Finalização:</strong> ${esc(fmtBr(tentativa.finalizado_em))}</p>
-      <p><strong>Pontuação:</strong> ${esc(tentativa.pontuacao)}%</p>
-      <p><strong>Acertos:</strong> ${corretas}/${total} (${percentual}%)</p>
-      <hr style="margin:16px 0">
-      <h3 style="margin:0 0 8px">Respostas</h3>
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead><tr style="background:#f3f4f6">
-          <th style="padding:8px;border:1px solid #ddd">#</th>
-          <th style="padding:8px;border:1px solid #ddd">Resposta do aluno</th>
-          <th style="padding:8px;border:1px solid #ddd">Gabarito</th>
-          <th style="padding:8px;border:1px solid #ddd">Status</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <hr style="margin:16px 0">
-      <p style="color:#64748b;font-size:12px">Universidade Federal do Cariri · Prof. Vinicius Sacramento</p>
-    </div>`;
-
-    const emailResp = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${resendKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: 'Prova Estatística II <onboarding@resend.dev>',
-        to: tentativa.email,
-        reply_to: 'vinicius.sacramento@ufca.edu.br',
-        subject: `Resultado — 2ª Avaliação — Estatística II — ${tentativa.nome_aluno}`,
-        html,
-      }),
-    });
-
-    const emailResult = await emailResp.json();
-    if (!emailResp.ok) {
-      throw new Error(emailResult.message || JSON.stringify(emailResult));
-    }
-
-    res.json({ ok: true, message: `E-mail enviado para ${tentativa.email}` });
+    const { email } = await enviarResultadoEmailPorTentativaId(req.params.id);
+    res.json({ ok: true, message: `E-mail enviado para ${email}` });
   } catch (e) {
     console.error('Erro ao enviar e-mail:', e);
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
