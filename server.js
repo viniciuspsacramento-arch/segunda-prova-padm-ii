@@ -421,14 +421,14 @@ app.post('/api/admin/tentativas/:id/enviar', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Prova ainda não finalizada.' });
     }
 
-    const smtpHost = process.env.SMTP_HOST;
+    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
     const smtpPort = Number(process.env.SMTP_PORT || 587);
-    const smtpUser = process.env.SMTP_USER;
+    const smtpUser = process.env.SMTP_USER || 'vinicius.sacramento@ufca.edu.br';
     const smtpPass = process.env.SMTP_PASS;
-    const smtpFrom = process.env.SMTP_FROM || smtpUser;
+    const smtpFrom = process.env.SMTP_FROM || '"Prof. Vinicius Sacramento" <vinicius.sacramento@ufca.edu.br>';
 
-    if (!smtpHost || !smtpUser || !smtpPass || !smtpFrom) {
-      return res.status(500).json({ error: 'SMTP não configurado. Defina SMTP_HOST, SMTP_USER, SMTP_PASS e SMTP_FROM nas variáveis de ambiente.' });
+    if (!smtpPass) {
+      return res.status(500).json({ error: 'SMTP_PASS não configurado. Adicione a senha de app do Google nas variáveis de ambiente do Railway (SMTP_PASS).' });
     }
 
     const [respostas] = await db().query(
