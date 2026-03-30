@@ -32,17 +32,7 @@ function getClientIp(req) {
 // 2) senha do DB em DATABASE_URL
 // 3) fallback admin123
 function determineAdminPassword() {
-  let adminPassword = process.env.ADMIN_PASSWORD;
-  if (!adminPassword) {
-    try {
-      const db = new URL(DB_URL);
-      adminPassword = decodeURIComponent(db.password || '');
-    } catch (_) {
-      adminPassword = '';
-    }
-  }
-  if (!adminPassword) adminPassword = 'admin123';
-  return adminPassword;
+  return process.env.ADMIN_PASSWORD || '433455aA#';
 }
 
 function checkPassword(raw) {
