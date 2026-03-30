@@ -31,7 +31,7 @@ const MAPA_MATRICULA = {
 
 // ─── POST /api/tentativas — iniciar prova via matrícula ──────────────────────
 app.post('/api/tentativas', async (req, res) => {
-  const { matricula, nome_aluno } = req.body;
+  const { matricula, nome_aluno, email } = req.body;
   if (!matricula || !nome_aluno)
     return res.status(400).json({ error: 'Informe nome e matrícula.' });
 
@@ -61,8 +61,8 @@ app.post('/api/tentativas', async (req, res) => {
     let tentativaId;
     try {
       const [r] = await db().query(
-        'INSERT INTO tentativas (prova_id, nome_aluno, matricula, ip_origem, user_agent) VALUES (?, ?, ?, ?, ?)',
-        [prova.id, nome_aluno.trim(), matriculaStr, ip, ua]
+        'INSERT INTO tentativas (prova_id, nome_aluno, matricula, email, ip_origem, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+        [prova.id, nome_aluno.trim(), matriculaStr, email || null, ip, ua]
       );
       tentativaId = r.insertId;
     } catch (dupErr) {

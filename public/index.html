@@ -252,6 +252,14 @@
           A prova será selecionada automaticamente com base na sua matrícula.
         </p>
       </div>
+      <div class="campo">
+        <label for="input-email">E-mail institucional</label>
+        <input type="email" id="input-email" placeholder="seuemail@alu.ufc.br ou @ufca.edu.br"
+               autocomplete="off">
+        <p style="margin-top:6px;font-size:.8rem;color:#64748b;">
+          Será utilizado para devolver o resultado da prova.
+        </p>
+      </div>
       <button class="btn btn-primario btn-lg" onclick="iniciarProva()">
         Iniciar Prova →
       </button>
@@ -270,11 +278,19 @@
       <p id="subtitulo-instrucoes"></p>
     </div>
     <div class="card-body">
+      <div class="aviso" style="background:#fef2f2;border-color:#fca5a5;">
+        <strong>🏛️ Prova presencial obrigatória</strong>
+        <p style="margin:.4rem 0 0;">
+          Esta avaliação deve ser realizada <strong>exclusivamente de forma presencial</strong>,
+          no ambiente autorizado pelo professor. A realização fora deste contexto
+          caracteriza irregularidade acadêmica.
+        </p>
+      </div>
       <div class="aviso">
         <strong>⚠️ Leia antes de iniciar:</strong>
         <ul>
           <li>A prova possui <strong>6 questões de múltipla escolha</strong>, totalizando 12 pontos.</li>
-          <li>Você tem <strong id="tempo-instrucao">90 minutos</strong> para concluir.</li>
+          <li>Você tem <strong id="tempo-instrucao">120 minutos</strong> para concluir.</li>
           <li>Seleção de texto, cópia e clique direito estão <strong>desativados</strong> durante a prova.</li>
           <li>Trocas de aba são <strong>registradas automaticamente</strong>.</li>
           <li>Ao clicar em <em>Finalizar Prova</em>, as respostas não poderão ser alteradas.</li>
@@ -389,12 +405,14 @@ function fecharAvisoTab() {
 async function iniciarProva() {
   const nome       = document.getElementById('input-nome').value.trim();
   const matricula  = document.getElementById('input-matricula').value.trim();
+  const email      = document.getElementById('input-email').value.trim();
   const msg        = document.getElementById('msg-inicio');
   const btn        = document.querySelector('#tela-inicio .btn-primario');
 
   if (!nome)      { msg.textContent = 'Por favor, informe seu nome completo.'; return; }
   if (!matricula) { msg.textContent = 'Por favor, informe sua matrícula.';     return; }
   if (matricula.length < 3) { msg.textContent = 'Matrícula muito curta.'; return; }
+  if (!email || !email.includes('@')) { msg.textContent = 'Por favor, informe um e-mail válido.'; return; }
   msg.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Aguarde…';
@@ -403,7 +421,7 @@ async function iniciarProva() {
     const r = await fetch('/api/tentativas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ matricula, nome_aluno: nome })
+      body: JSON.stringify({ matricula, nome_aluno: nome, email })
     });
     const data = await r.json();
     if (data.error) {
