@@ -19,6 +19,39 @@ function db() {
 
 // ─── Filtro: só provas da Segunda Chamada ────────────────────────────────────
 const FILTRO = '%Segunda Prova%';
+const LOGIN_MAX_TENTATIVAS = Number(process.env.ADMIN_LOGIN_MAX_TENTATIVAS || 5);
+const LOGIN_BLOQUEIO_MINUTOS = Number(process.env.ADMIN_LOGIN_BLOQUEIO_MINUTOS || 10);
+const adminLoginEstadoPorIp = new Map();
+
+function getClientIp(req) {
+  return (req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim() || 'ip-desconhecido';
+}
+
+// Mesma lógica do sistema-provas original:
+// 1) ADMIN_PASSWORD
+// 2) senha do DB em DATABASE_URL
+// 3) fallback admin123
+function determineAdminPassword() {
+  let adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminPassword) {
+    try {
+      const db = new URL(DB_URL);
+      adminPassword = decodeURIComponent(db.password || '');
+    } catch (_) {
+      adminPassword = '';
+    }
+  }
+  if (!adminPassword) adminPassword = 'admin123';
+  return adminPassword;
+}
+
+function requireAdmin(req, res, next) {
+  const senha = req.headers['x-admin-password'];
+  if (!senha || senha !== determineAdminPassword()) {
+    return res.status(401).json({ error: 'Não autorizado.' });
+  }
+  return next();
+}
 
 // ─── Mapeamento matrícula → índice da turma (0=I … 4=V) ─────────────────────
 const MAPA_MATRICULA = {
@@ -235,6 +268,117 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
 
     res.json({ tentativa: tent, respostas });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── POST /api/auth/login — login admin (mesmo padrão do original) ───────────
+app.post('/api/auth/login', (req, res) => {
+  const { password } = req.body || {};
+  const adminPassword = determineAdminPassword();
+  const ip = getClientIp(req);
+  const agora = Date.now();
+  const estado = adminLoginEstadoPorIp.get(ip) || { tentativas: 0, bloqueadoAte: 0 };
+
+  if (estado.bloqueadoAte && agora < estado.bloqueadoAte) {
+    const minutosRestantes = Math.ceil((estado.bloqueadoAte - agora) / 60000);
+    return res.status(429).json({
+      success: false,
+      error: `Login admin temporariamente bloqueado por tentativas inválidas. Tente novamente em ${minutosRestantes} minuto(s).`
+    });
+  }
+
+  const isLocal = req.hostname === 'localhost' || req.hostname === '127.0.0.1';
+  if (isLocal && password === 'admin') {
+    adminLoginEstadoPorIp.delete(ip);
+    return res.json({ success: true, token: 'admin-session-active' });
+  }
+
+  if (password === adminPassword) {
+    adminLoginEstadoPorIp.delete(ip);
+    return res.json({ success: true, token: 'admin-session-active' });
+  }
+
+  estado.tentativas += 1;
+  if (estado.tentativas >= LOGIN_MAX_TENTATIVAS) {
+    estado.tentativas = 0;
+    estado.bloqueadoAte = agora + (LOGIN_BLOQUEIO_MINUTOS * 60000);
+    adminLoginEstadoPorIp.set(ip, estado);
+    return res.status(429).json({
+      success: false,
+      error: `Bloqueado após ${LOGIN_MAX_TENTATIVAS} tentativas inválidas. Aguarde ${LOGIN_BLOQUEIO_MINUTOS} minuto(s).`
+    });
+  }
+
+  adminLoginEstadoPorIp.set(ip, estado);
+  const restantes = LOGIN_MAX_TENTATIVAS - estado.tentativas;
+  return res.status(401).json({
+    success: false,
+    error: `Senha incorreta. Restam ${restantes} tentativa(s) antes do bloqueio temporário.`
+  });
+});
+
+// ─── GET /api/admin/tentativas — painel administrativo ───────────────────────
+app.get('/api/admin/tentativas', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db().query(
+      `SELECT t.id, t.nome_aluno, t.matricula, t.email, t.iniciado_em, t.finalizado_em,
+              t.pontuacao, t.tempo_total, t.trocas_aba,
+              COALESCE(p.titulo_publico, p.titulo) AS prova_titulo
+       FROM tentativas t
+       JOIN provas p ON p.id = t.prova_id
+       WHERE p.titulo LIKE ?
+       ORDER BY t.iniciado_em DESC`,
+      [FILTRO]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── GET /api/admin/tentativas/:id — detalhes da tentativa ───────────────────
+app.get('/api/admin/tentativas/:id', requireAdmin, async (req, res) => {
+  try {
+    const [[tentativa]] = await db().query(
+      `SELECT t.id, t.nome_aluno, t.matricula, t.email, t.iniciado_em, t.finalizado_em,
+              t.pontuacao, t.tempo_total, t.trocas_aba,
+              COALESCE(p.titulo_publico, p.titulo) AS prova_titulo
+       FROM tentativas t
+       JOIN provas p ON p.id = t.prova_id
+       WHERE t.id = ? AND p.titulo LIKE ?`,
+      [req.params.id, FILTRO]
+    );
+
+    if (!tentativa) {
+      return res.status(404).json({ error: 'Tentativa não encontrada.' });
+    }
+
+    const [respostas] = await db().query(
+      `SELECT pq.ordem,
+              q.enunciado,
+              a_resp.texto AS resposta_dada,
+              a_resp.correta AS acertou,
+              a_cert.texto AS resposta_correta,
+              pq.valor_questao
+       FROM respostas r
+       JOIN tentativas t ON t.id = r.tentativa_id
+       JOIN provas_questoes pq ON pq.prova_id = t.prova_id AND pq.questao_id = r.questao_id
+       JOIN questoes q ON q.id = r.questao_id
+       JOIN alternativas a_resp ON a_resp.id = r.alternativa_id
+       JOIN alternativas a_cert ON a_cert.questao_id = r.questao_id AND a_cert.correta = 1
+       WHERE r.tentativa_id = ?
+       ORDER BY pq.ordem`,
+      [req.params.id]
+    );
+
+    res.json({ tentativa, respostas });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Painel /admin ────────────────────────────────────────────────────────────
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 // ─── Fallback SPA ─────────────────────────────────────────────────────────────
