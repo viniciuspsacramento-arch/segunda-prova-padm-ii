@@ -276,6 +276,20 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── GET /api/debug/db — diagnóstico da conexão do banco ─────────────────────
+app.get('/api/debug/db', async (req, res) => {
+  try {
+    const envRaw = process.env.DATABASE_URL || '(não definida)';
+    const envSafe = envRaw.startsWith('mysql://') ? envRaw.replace(/:([^@]+)@/, ':****@') : envRaw.substring(0, 60);
+    const [[r]] = await db().query('SELECT 1 AS ok');
+    res.json({ db_ok: true, url_usada: DB_URL.replace(/:([^@]+)@/, ':****@'), env_raw: envSafe });
+  } catch (e) {
+    const envRaw = process.env.DATABASE_URL || '(não definida)';
+    const envSafe = envRaw.startsWith('mysql://') ? envRaw.replace(/:([^@]+)@/, ':****@') : envRaw.substring(0, 60);
+    res.status(500).json({ db_ok: false, error: e.message, url_usada: DB_URL.replace(/:([^@]+)@/, ':****@'), env_raw: envSafe });
+  }
+});
+
 // ─── GET /api/auth/info — diagnóstico sem revelar a senha completa ───────────
 app.get('/api/auth/info', (req, res) => {
   const adm = determineAdminPassword();
