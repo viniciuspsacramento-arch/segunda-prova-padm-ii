@@ -9,9 +9,20 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Banco de dados ──────────────────────────────────────────────────────────
-const DB_URL = process.env.DATABASE_URL ||
-  'mysql://root:DnfWVyYtTnGNnbwKlKbqegCOZeTvSlin@gondola.proxy.rlwy.net:25921/railway';
+const DB_URL_FALLBACK = 'mysql://root:DnfWVyYtTnGNnbwKlKbqegCOZeTvSlin@gondola.proxy.rlwy.net:25921/railway';
 
+function resolveDbUrl() {
+  const envUrl = process.env.DATABASE_URL;
+  if (!envUrl) return DB_URL_FALLBACK;
+  try {
+    const u = new URL(envUrl);
+    if (u.protocol === 'mysql:' && u.hostname) return envUrl;
+  } catch (_) {}
+  if (envUrl.startsWith('${{')) return DB_URL_FALLBACK;
+  return envUrl;
+}
+
+const DB_URL = resolveDbUrl();
 let pool;
 function db() {
   if (!pool) pool = mysql.createPool(DB_URL);
