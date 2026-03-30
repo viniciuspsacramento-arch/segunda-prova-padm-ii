@@ -83,10 +83,15 @@ app.post('/api/tentativas', async (req, res) => {
       }
     }
 
+    // Remove " — Turma X" ou " - Turma X" do título público antes de enviar ao cliente
+    const tituloPublico = (prova.titulo || '')
+      .replace(/\s*[—\-–]+\s*Turma\s+[IVXLC\d]+\s*$/i, '')
+      .trim();
+
     res.json({
       id:           tentativaId,
       prova_id:     prova.id,
-      prova_titulo: prova.titulo,
+      prova_titulo: tituloPublico,
       tempo_limite: prova.tempo_limite || 90,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -202,12 +207,18 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
     const [[tent]] = await db().query(
       `SELECT t.id, t.nome_aluno, t.pontuacao, t.trocas_aba, t.tempo_total,
               t.iniciado_em, t.finalizado_em,
-              COALESCE(p.titulo_publico, p.titulo) AS prova_titulo
+              COALESCE(p.titulo_publico, p.titulo) AS prova_titulo_raw
        FROM tentativas t JOIN provas p ON p.id = t.prova_id
        WHERE t.id = ?`,
       [req.params.id]
     );
     if (!tent) return res.status(404).json({ error: 'Tentativa não encontrada.' });
+
+    // Oculta identificação da turma do aluno
+    tent.prova_titulo = (tent.prova_titulo_raw || '')
+      .replace(/\s*[—\-–]+\s*Turma\s+[IVXLC\d]+\s*$/i, '')
+      .trim();
+    delete tent.prova_titulo_raw;
 
     const [respostas] = await db().query(
       `SELECT pq.ordem,
