@@ -83,10 +83,8 @@ app.post('/api/tentativas', async (req, res) => {
       }
     }
 
-    // Remove " — Turma X" ou " - Turma X" do título público antes de enviar ao cliente
-    const tituloPublico = (prova.titulo || '')
-      .replace(/\s*[—\-–]+\s*Turma\s+[IVXLC\d]+\s*$/i, '')
-      .trim();
+    // Exibe apenas "2ª Avaliação — Estatística II" — sem turma nem variante
+    const tituloPublico = '2ª Avaliação — Estatística II';
 
     res.json({
       id:           tentativaId,
@@ -214,10 +212,7 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
     );
     if (!tent) return res.status(404).json({ error: 'Tentativa não encontrada.' });
 
-    // Oculta identificação da turma do aluno
-    tent.prova_titulo = (tent.prova_titulo_raw || '')
-      .replace(/\s*[—\-–]+\s*Turma\s+[IVXLC\d]+\s*$/i, '')
-      .trim();
+    tent.prova_titulo = '2ª Avaliação — Estatística II';
     delete tent.prova_titulo_raw;
 
     const [respostas] = await db().query(

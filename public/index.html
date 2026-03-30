@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>2ª Avaliação — Estatística II — Segunda Prova</title>
+<title>2ª Avaliação — Estatística II</title>
 <style>
   :root {
     --azul:    #1a3a5c;
@@ -235,8 +235,8 @@
 <div id="tela-inicio" class="tela ativa">
   <div class="card">
     <div class="card-header">
-      <h1>2ª Avaliação — Estatística Aplicada a Negócios II</h1>
-      <p>Segunda Prova · Universidade Federal do Cariri · Prof. Vinicius Sacramento</p>
+      <h1>2ª Avaliação — Estatística II</h1>
+      <p>30/03/2026 · Universidade Federal do Cariri · Prof. Vinicius Sacramento</p>
     </div>
     <div class="card-body">
       <div class="campo">
@@ -421,7 +421,7 @@ async function iniciarProva() {
     S.segundosRestantes = (data.tempo_limite || 90) * 60;
 
     // Tela de instruções
-    document.getElementById('titulo-instrucoes').textContent    = '2ª Avaliação — Estatística Aplicada a Negócios II';
+    document.getElementById('titulo-instrucoes').textContent    = '2ª Avaliação — Estatística II';
     document.getElementById('subtitulo-instrucoes').textContent = `Aluno: ${nome} · Matrícula: ${matricula}`;
     document.getElementById('tempo-instrucao').textContent      = `${data.tempo_limite || 90} minutos`;
 
@@ -448,7 +448,7 @@ async function comecarProva() {
 
   // Header
   document.getElementById('header-nome').textContent = S.nomeAluno;
-  document.getElementById('header-prova-titulo').textContent = '2ª Avaliação — Estatística II — Segunda Prova';
+  document.getElementById('header-prova-titulo').textContent = '2ª Avaliação — Estatística II';
   document.getElementById('header-prova').classList.add('visivel');
 
   // Proteções
@@ -569,7 +569,7 @@ async function mostrarResultado() {
   const acertos_pts = respostas.filter(r => r.acertou).reduce((s, r) => s + parseFloat(r.valor_questao), 0);
 
   document.getElementById('resultado-subtitulo').textContent =
-    `${tentativa.nome_aluno} · 2ª Avaliação — Estatística II — Segunda Prova`;
+    `${tentativa.nome_aluno} · 2ª Avaliação — Estatística II`;
 
   const notaEl = document.getElementById('nota-grande');
   notaEl.innerHTML = `<div class="nota-grande ${nota >= 60 ? 'aprovado' : 'reprovado'}">
