@@ -18,7 +18,7 @@ function db() {
 }
 
 // ─── Filtro: só provas da Segunda Chamada ────────────────────────────────────
-const FILTRO = '%Segunda Chamada%';
+const FILTRO = '%Segunda Prova%';
 
 // ─── Mapeamento matrícula → índice da turma (0=I … 4=V) ─────────────────────
 const MAPA_MATRICULA = {
