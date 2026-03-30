@@ -20,7 +20,7 @@ function db() {
 // ─── Filtro: só provas da Segunda Chamada ────────────────────────────────────
 const FILTRO = '%Segunda Prova%';
 const LOGIN_MAX_TENTATIVAS = Number(process.env.ADMIN_LOGIN_MAX_TENTATIVAS || 5);
-const LOGIN_BLOQUEIO_MINUTOS = Number(process.env.ADMIN_LOGIN_BLOQUEIO_MINUTOS || 10);
+const LOGIN_BLOQUEIO_MINUTOS = Number(process.env.ADMIN_LOGIN_BLOQUEIO_MINUTOS || 2);
 const adminLoginEstadoPorIp = new Map();
 
 function getClientIp(req) {
@@ -45,9 +45,13 @@ function determineAdminPassword() {
   return adminPassword;
 }
 
+function checkPassword(raw) {
+  if (!raw) return false;
+  return raw.trim() === determineAdminPassword().trim();
+}
+
 function requireAdmin(req, res, next) {
-  const senha = req.headers['x-admin-password'];
-  if (!senha || senha !== determineAdminPassword()) {
+  if (!checkPassword(req.headers['x-admin-password'])) {
     return res.status(401).json({ error: 'Não autorizado.' });
   }
   return next();
@@ -270,6 +274,21 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── GET /api/auth/info — diagnóstico sem revelar a senha completa ───────────
+app.get('/api/auth/info', (req, res) => {
+  const adm = determineAdminPassword();
+  const fonte = process.env.ADMIN_PASSWORD
+    ? 'ADMIN_PASSWORD (env var)'
+    : (process.env.DATABASE_URL ? 'DATABASE_URL (senha do banco)' : 'hardcoded');
+  res.json({
+    ADMIN_PASSWORD_definida: !!process.env.ADMIN_PASSWORD,
+    fonte,
+    senha_tamanho: adm.length,
+    senha_inicio: adm.slice(0, 4),
+    senha_fim: adm.slice(-2),
+  });
+});
+
 // ─── POST /api/auth/login — login admin (mesmo padrão do original) ───────────
 app.post('/api/auth/login', (req, res) => {
   const { password } = req.body || {};
@@ -292,7 +311,7 @@ app.post('/api/auth/login', (req, res) => {
     return res.json({ success: true, token: 'admin-session-active' });
   }
 
-  if (password === adminPassword) {
+  if ((password || '').trim() === adminPassword.trim()) {
     adminLoginEstadoPorIp.delete(ip);
     return res.json({ success: true, token: 'admin-session-active' });
   }
