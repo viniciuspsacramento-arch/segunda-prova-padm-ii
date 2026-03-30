@@ -12,14 +12,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 const DB_URL_FALLBACK = 'mysql://root:DnfWVyYtTnGNnbwKlKbqegCOZeTvSlin@gondola.proxy.rlwy.net:25921/railway';
 
 function resolveDbUrl() {
-  const envUrl = process.env.DATABASE_URL;
-  if (!envUrl) return DB_URL_FALLBACK;
+  const envUrl = (process.env.DATABASE_URL || '').trim();
+  if (!envUrl || envUrl.includes('SENHA') || envUrl.includes('PORTA') || envUrl.startsWith('${{')) {
+    return DB_URL_FALLBACK;
+  }
   try {
     const u = new URL(envUrl);
-    if (u.protocol === 'mysql:' && u.hostname) return envUrl;
+    if (u.protocol === 'mysql:' && u.hostname && u.hostname !== 'host') return envUrl;
   } catch (_) {}
-  if (envUrl.startsWith('${{')) return DB_URL_FALLBACK;
-  return envUrl;
+  return DB_URL_FALLBACK;
 }
 
 const DB_URL = resolveDbUrl();
