@@ -68,6 +68,25 @@
       color: var(--text);
       border-color: #cbd5e1;
     }
+    button.danger {
+      background: #dc2626;
+      border-color: #dc2626;
+      color: #fff;
+    }
+    button.success {
+      background: #16a34a;
+      border-color: #16a34a;
+      color: #fff;
+    }
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    .acoes-btns {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -249,7 +268,11 @@
           <td>${t.trocas_aba ?? 0}</td>
           <td>${fmtData(t.iniciado_em)}</td>
           <td>${fmtData(t.finalizado_em)}</td>
-          <td><button class="secondary" onclick="verDetalhes(${t.id})">Ver</button></td>
+          <td><div class="acoes-btns">
+            <button class="secondary" onclick="verDetalhes(${t.id})">Ver</button>
+            <button class="success" onclick="enviarEmail(${t.id}, this)" ${!t.finalizado_em || !t.email ? 'disabled title="Prova não finalizada ou sem e-mail"' : ''}>Enviar</button>
+            <button class="danger" onclick="excluirTentativa(${t.id}, this)">Excluir</button>
+          </div></td>
         </tr>
       `).join('');
     }
@@ -299,6 +322,49 @@
         `;
       } catch (e) {
         alert(`Erro ao carregar detalhes: ${e.message}`);
+      }
+    };
+
+    window.excluirTentativa = async (id, btn) => {
+      if (!confirm(`Excluir tentativa #${id}? Todas as respostas serão removidas permanentemente.`)) return;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const r = await fetch(`/api/admin/tentativas/${id}`, {
+          method: 'DELETE',
+          headers: { 'x-admin-password': S.senha }
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Erro ao excluir.');
+        alert(j.message || 'Excluída!');
+        await carregar();
+      } catch (e) {
+        alert(`Erro: ${e.message}`);
+        btn.disabled = false;
+        btn.textContent = 'Excluir';
+      }
+    };
+
+    window.enviarEmail = async (id, btn) => {
+      const t = S.tentativas.find(x => x.id === id);
+      const dest = t ? t.email : '?';
+      if (!confirm(`Enviar resultado da tentativa #${id} para ${dest}?`)) return;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = 'Enviando…';
+      try {
+        const r = await fetch(`/api/admin/tentativas/${id}/enviar`, {
+          method: 'POST',
+          headers: { 'x-admin-password': S.senha, 'Content-Type': 'application/json' }
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Erro ao enviar.');
+        alert(j.message || 'E-mail enviado!');
+        btn.textContent = 'Enviado ✓';
+      } catch (e) {
+        alert(`Erro: ${e.message}`);
+        btn.disabled = false;
+        btn.textContent = original;
       }
     };
 
