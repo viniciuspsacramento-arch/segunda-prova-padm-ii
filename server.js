@@ -520,9 +520,7 @@ app.post('/api/admin/tentativas/:id/enviar', requireAdmin, async (req, res) => {
     </div>`;
 
     const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
+      service: 'gmail',
       auth: { user: smtpUser, pass: smtpPass },
     });
 
