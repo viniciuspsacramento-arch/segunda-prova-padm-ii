@@ -1,8 +1,7 @@
 require('dotenv').config();
-const express    = require('express');
-const mysql      = require('mysql2/promise');
-const path       = require('path');
-const nodemailer = require('nodemailer');
+const express = require('express');
+const mysql   = require('mysql2/promise');
+const path    = require('path');
 
 const app = express();
 app.use(express.json());
@@ -447,14 +446,9 @@ app.post('/api/admin/tentativas/:id/enviar', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Prova ainda não finalizada.' });
     }
 
-    const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-    const smtpPort = Number(process.env.SMTP_PORT || 587);
-    const smtpUser = process.env.SMTP_USER || 'vinicius.sacramento@ufca.edu.br';
-    const smtpPass = process.env.SMTP_PASS;
-    const smtpFrom = process.env.SMTP_FROM || '"Prof. Vinicius Sacramento" <vinicius.sacramento@ufca.edu.br>';
-
-    if (!smtpPass) {
-      return res.status(500).json({ error: 'SMTP_PASS não configurado. Adicione a senha de app do Google nas variáveis de ambiente do Railway (SMTP_PASS).' });
+    const resendKey = process.env.RESEND_API_KEY;
+    if (!resendKey) {
+      return res.status(500).json({ error: 'RESEND_API_KEY não configurado. Adicione nas variáveis de ambiente do Railway.' });
     }
 
     const [respostas] = await db().query(
@@ -519,17 +513,25 @@ app.post('/api/admin/tentativas/:id/enviar', requireAdmin, async (req, res) => {
       <p style="color:#64748b;font-size:12px">Universidade Federal do Cariri · Prof. Vinicius Sacramento</p>
     </div>`;
 
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: smtpUser, pass: smtpPass },
+    const emailResp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${resendKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: 'Prova Estatística II <onboarding@resend.dev>',
+        to: tentativa.email,
+        reply_to: 'vinicius.sacramento@ufca.edu.br',
+        subject: `Resultado — 2ª Avaliação — Estatística II — ${tentativa.nome_aluno}`,
+        html,
+      }),
     });
 
-    await transporter.sendMail({
-      from: smtpFrom,
-      to: tentativa.email,
-      subject: `Resultado — 2ª Avaliação — Estatística II — ${tentativa.nome_aluno}`,
-      html,
-    });
+    const emailResult = await emailResp.json();
+    if (!emailResp.ok) {
+      throw new Error(emailResult.message || JSON.stringify(emailResult));
+    }
 
     res.json({ ok: true, message: `E-mail enviado para ${tentativa.email}` });
   } catch (e) {
