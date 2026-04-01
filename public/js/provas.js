@@ -64,10 +64,8 @@ function renderizarProvas(provas) {
 
     container.innerHTML = provas.map(p => {
         const isAtivo = !!p.ativo;
-        const borderColor = isAtivo ? '#22c55e' : 'var(--border-color)';
-        const bgTint = isAtivo ? 'rgba(34, 197, 94, 0.06)' : '';
         return `
-        <div class="card" style="border: 1.5px solid ${borderColor}; ${bgTint ? `background: ${bgTint};` : ''}">
+        <div class="card">
             <div class="flex-between mb-2">
                 <div>
                     <h4 style="margin: 0;">${p.titulo}</h4>
@@ -78,23 +76,13 @@ function renderizarProvas(provas) {
                 </button>
             </div>
 
-            <!-- Toggle Ativo -->
-            <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: ${isAtivo ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.08)'}; cursor: pointer;" onclick="toggleAtivoProva(${p.id})" title="${isAtivo ? 'Clique para desativar' : 'Clique para ativar'}">
-                <span style="display: inline-block; width: 38px; height: 20px; border-radius: 10px; background: ${isAtivo ? '#22c55e' : '#555'}; position: relative; transition: background 0.2s;">
-                    <span style="display: inline-block; width: 16px; height: 16px; border-radius: 50%; background: #fff; position: absolute; top: 2px; ${isAtivo ? 'right: 2px;' : 'left: 2px;'} transition: all 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"></span>
-                </span>
-                <span style="font-size: 0.82rem; font-weight: 600; color: ${isAtivo ? '#22c55e' : '#ef4444'};">
-                    ${isAtivo ? '✅ Ativa para alunos' : '⛔ Inativa'}
-                </span>
-            </div>
-            
             ${p.descricao ? `<p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">${p.descricao}</p>` : ''}
-            
+
             <div style="display: flex; gap: 1rem; font-size: 0.875rem; color: var(--text-muted);">
                 <div>📝 ${p.total_questoes} questões</div>
                 ${p.tempo_limite ? `<div>⏱️ ${p.tempo_limite} min</div>` : '<div>⏱️ Sem limite</div>'}
             </div>
-            
+
             <div class="flex gap-2 mt-3">
                 <button class="btn btn-sm btn-secondary" onclick="verProva(${p.id})">
                     👁️ Ver Detalhes
@@ -103,6 +91,15 @@ function renderizarProvas(provas) {
                     ✏️ Editar
                 </button>
             </div>
+
+            <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; cursor: pointer; user-select: none; font-size: 0.875rem;">
+                <input type="checkbox" id="ativo-prova-${p.id}" ${isAtivo ? 'checked' : ''}
+                    onchange="toggleAtivoProva(${p.id})"
+                    style="width: 16px; height: 16px; accent-color: #22c55e; cursor: pointer;">
+                <span style="color: ${isAtivo ? '#22c55e' : 'var(--text-muted)'}; font-weight: 600;">
+                    ${isAtivo ? '✅ Ativa para sorteio dos alunos' : '⬜ Inativa (alunos não podem realizar)'}
+                </span>
+            </label>
         </div>
     `;
     }).join('');
