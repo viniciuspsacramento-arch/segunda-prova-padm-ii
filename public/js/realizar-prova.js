@@ -146,8 +146,14 @@ async function iniciarProva(provaId, nomeAlunoParam = null, matriculaParam = nul
         // Esconder cabeçalho para foco total
         document.querySelector('header').classList.add('hidden');
 
+        // Montar layout com planilha integrada
+        montarLayoutProva(nomeAluno);
+
         // Ativar proteções
         ativarProtecoes(nomeAluno);
+
+        // Inicializar Google Sheets / Excel Online
+        await inicializarFerramentasProva();
 
         // Renderizar primeira questão
         renderizarQuestao();
@@ -159,74 +165,97 @@ async function iniciarProva(provaId, nomeAlunoParam = null, matriculaParam = nul
 }
 
 // ============================================
+// LAYOUT DA PROVA (questões + planilha)
+// ============================================
+
+function montarLayoutProva(nomeAluno) {
+    const container = document.getElementById('realizandoProva');
+    container.innerHTML = `
+        <div class="prova-layout">
+            <div class="prova-col-questoes" id="provaColQuestoes"></div>
+            <div class="prova-col-planilha" id="provaColPlanilha">
+                <div class="planilha-toolbar">
+                    <span id="planilhaBadgeStatus" class="planilha-badge hidden">Planilha</span>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="alternarPainelPlanilha()" title="Mostrar/ocultar planilha">
+                        ⇔ Planilha
+                    </button>
+                </div>
+                <div id="painelPlanilhaSetup"></div>
+                <iframe id="planilhaFrame" class="planilha-frame hidden" title="Planilha do aluno" allow="clipboard-read; clipboard-write"></iframe>
+            </div>
+        </div>
+    `;
+}
+
+// ============================================
 // PROTEÇÕES ANTI-CÓPIA
 // ============================================
 
 function ativarProtecoes(nomeAluno) {
     const container = document.getElementById('realizandoProva');
 
-    // Adicionar classe no-select
+    // Adicionar classe no-select (questões; planilha no iframe não é afetada)
     container.classList.add('no-select');
 
-    // Adicionar marca d'água
-    const watermark = document.createElement('div');
-    watermark.className = 'watermark';
+    // Marca d'água no body para não ser apagada ao trocar questão
+    let watermark = document.getElementById('provaWatermark');
+    if (!watermark) {
+        watermark = document.createElement('div');
+        watermark.id = 'provaWatermark';
+        watermark.className = 'watermark';
+        document.body.appendChild(watermark);
+    }
     watermark.textContent = nomeAluno;
-    container.appendChild(watermark);
 
-    // Bloquear clique direito
-    container.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        mostrarAviso('Clique direito desabilitado durante a prova');
-        return false;
-    });
+    // Bloquear clique direito nas questões (planilha permite interação normal)
+    container.addEventListener('contextmenu', handleContextMenuProva);
 
-    // Bloquear atalhos de cópia
-    container.addEventListener('keydown', (e) => {
-        // Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+P, F12
-        if ((e.ctrlKey || e.metaKey) && ['c', 'v', 'x', 'a', 'p'].includes(e.key.toLowerCase())) {
-            e.preventDefault();
-            mostrarAviso('Atalhos de teclado desabilitados durante a prova');
-            return false;
-        }
+    // Bloquear atalhos de cópia nas questões
+    container.addEventListener('keydown', handleKeydownProva);
 
-        // F12 (DevTools)
-        if (e.key === 'F12') {
-            e.preventDefault();
-            return false;
-        }
-    });
-
-    // Detectar troca de aba/janela
+    // Detectar saída real da aba do navegador (não penaliza foco no iframe da planilha)
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleWindowBlur);
+}
+
+function handleContextMenuProva(e) {
+    if (e.target.closest('#provaColPlanilha')) return;
+    e.preventDefault();
+    mostrarAviso('Clique direito desabilitado nas questões');
+    return false;
+}
+
+function handleKeydownProva(e) {
+    if (e.target.closest('#provaColPlanilha')) return;
+
+    if ((e.ctrlKey || e.metaKey) && ['c', 'v', 'x', 'a', 'p'].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        mostrarAviso('Atalhos de teclado desabilitados nas questões');
+        return false;
+    }
+
+    if (e.key === 'F12') {
+        e.preventDefault();
+        return false;
+    }
 }
 
 function desativarProtecoes() {
     const container = document.getElementById('realizandoProva');
 
-    // Remover classe no-select
     container.classList.remove('no-select');
 
-    // Remover marca d'água
-    const watermark = container.querySelector('.watermark');
-    if (watermark) {
-        watermark.remove();
-    }
+    const watermark = document.getElementById('provaWatermark');
+    if (watermark) watermark.remove();
 
-    // Remover event listeners
+    container.removeEventListener('contextmenu', handleContextMenuProva);
+    container.removeEventListener('keydown', handleKeydownProva);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
-    window.removeEventListener('blur', handleWindowBlur);
+
+    resetarFerramentasProva();
 }
 
 function handleVisibilityChange() {
-    if (document.hidden && tentativaAtual) {
-        registrarTrocaAba();
-    }
-}
-
-function handleWindowBlur() {
-    if (tentativaAtual) {
+    if (document.hidden && tentativaAtual && !window._focoNaPlanilha) {
         registrarTrocaAba();
     }
 }
@@ -335,7 +364,8 @@ function pararTimer() {
 
 function renderizarQuestao() {
     const questao = provaAtual.questoes[questaoAtualIndex];
-    const container = document.getElementById('realizandoProva');
+    const container = document.getElementById('provaColQuestoes');
+    if (!container) return;
 
     container.innerHTML = `
         <div class="card" style="max-width: 900px; margin: 0 auto;">
@@ -507,6 +537,7 @@ function mostrarResultadoProva(resultado) {
 }
 
 function voltarParaSelecao() {
+    desativarProtecoes();
     document.getElementById('realizandoProva').classList.add('hidden');
     document.getElementById('realizandoProva').innerHTML = '';
     document.getElementById('selecionarProva').classList.remove('hidden');

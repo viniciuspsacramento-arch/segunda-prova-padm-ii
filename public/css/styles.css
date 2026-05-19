@@ -828,3 +828,178 @@ tr:hover {
     background: rgba(129, 140, 248, 0.9);
     opacity: 1 !important;
 }
+
+/* ============================================
+   PROVA COM PLANILHA INTEGRADA
+   ============================================ */
+.prova-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr);
+    gap: 1rem;
+    align-items: start;
+    min-height: calc(100vh - 2rem);
+}
+
+.prova-col-questoes {
+    min-width: 0;
+}
+
+.prova-col-planilha {
+    position: sticky;
+    top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 70vh;
+    background: var(--bg-card);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: var(--radius-lg);
+    padding: 0.75rem;
+    box-shadow: var(--shadow-md);
+}
+
+.prova-col-planilha.planilha-colapsada {
+    min-height: auto;
+}
+
+.prova-col-planilha.planilha-colapsada .planilha-frame,
+.prova-col-planilha.planilha-colapsada #painelPlanilhaSetup {
+    display: none !important;
+}
+
+.planilha-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.planilha-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.planilha-setup h4 {
+    margin-bottom: 0.35rem;
+}
+
+.planilha-botoes-provedor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.btn-planilha {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    justify-content: flex-start;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+}
+
+.btn-google {
+    background: #fff;
+    color: #1f2937;
+    border: 1px solid #d1d5db;
+}
+
+.btn-google:hover {
+    background: #f9fafb;
+}
+
+.btn-microsoft {
+    background: #0078d4;
+    color: #fff;
+    border: 1px solid #006cbd;
+}
+
+.btn-microsoft:hover {
+    background: #106ebe;
+}
+
+.planilha-icone {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 0.9rem;
+    background: rgba(0, 0, 0, 0.08);
+}
+
+.btn-microsoft .planilha-icone {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.planilha-status {
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.planilha-status-success {
+    color: var(--success);
+}
+
+.planilha-status-error {
+    color: var(--error);
+}
+
+.planilha-acoes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.planilha-lista-arquivos {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.planilha-arquivo-item {
+    text-align: left;
+    width: 100%;
+}
+
+.planilha-frame {
+    flex: 1;
+    width: 100%;
+    min-height: 60vh;
+    border: 1px solid var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    background: #fff;
+}
+
+#realizandoProva.no-select .prova-col-planilha {
+    user-select: auto;
+    -webkit-user-select: auto;
+}
+
+@media (max-width: 1024px) {
+    .prova-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .prova-col-planilha {
+        position: static;
+        min-height: 50vh;
+    }
+
+    .planilha-frame {
+        min-height: 45vh;
+    }
+}

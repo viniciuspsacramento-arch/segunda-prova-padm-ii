@@ -580,6 +580,16 @@ app.get('/api/healthcheck', async (req, res) => {
     }
 });
 
+// Config pública para Google Sheets / Excel Online na prova
+app.get('/api/config/ferramentas', (req, res) => {
+    res.json({
+        googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+        googleApiKey: process.env.GOOGLE_API_KEY || '',
+        microsoftClientId: process.env.MICROSOFT_CLIENT_ID || '',
+        microsoftTenantId: process.env.MICROSOFT_TENANT_ID || 'common'
+    });
+});
+
 // ============================================
 // AUTENTICAÇÃO
 // ============================================
@@ -1313,14 +1323,22 @@ app.get('/api/aluno/prova-por-matricula/:matricula', async (req, res) => {
                 error: 'Nenhuma prova está ativa no momento. Contate o professor.'
             });
         }
-        if (provasTurma.length !== 5) {
+
+        let prova;
+        let indice = 0;
+
+        if (provasTurma.length === 1) {
+            // Modo prova única: todos os alunos recebem a mesma prova
+            prova = provasTurma[0];
+        } else if (provasTurma.length === 5) {
+            // Modo distribuição: sorteia pela matrícula
+            indice = obterIndiceProvaPorFinalMatricula(ultimoDigito);
+            prova = provasTurma[indice];
+        } else {
             return res.status(400).json({
-                error: `Configuração incompleta: esperado 5 provas ativas, encontradas ${provasTurma.length}. Contate o professor.`
+                error: `Configuração inválida: deve haver 1 ou 5 provas ativas, encontradas ${provasTurma.length}. Contate o professor.`
             });
         }
-
-        const indice = obterIndiceProvaPorFinalMatricula(ultimoDigito);
-        const prova = provasTurma[indice];
 
         return res.json({
             prova_id: prova.id,
@@ -1378,18 +1396,25 @@ app.post('/api/tentativas', async (req, res) => {
                 error: 'Nenhuma prova está ativa no momento. Contate o professor.'
             });
         }
-        if (provasTurma.length !== 5) {
+
+        let provaEsperada;
+        if (provasTurma.length === 1) {
+            // Modo prova única: todos recebem a mesma
+            provaEsperada = provasTurma[0];
+        } else if (provasTurma.length === 5) {
+            // Modo distribuição por último dígito
+            const indiceEsperado = obterIndiceProvaPorFinalMatricula(ultimoDigito);
+            provaEsperada = provasTurma[indiceEsperado];
+        } else {
             return res.status(400).json({
-                error: `Configuração incompleta: esperado 5 provas ativas, encontradas ${provasTurma.length}. Contate o professor.`
+                error: `Configuração inválida: deve haver 1 ou 5 provas ativas, encontradas ${provasTurma.length}. Contate o professor.`
             });
         }
 
-        const indiceEsperado = obterIndiceProvaPorFinalMatricula(ultimoDigito);
-        const provaEsperada = provasTurma[indiceEsperado];
         const provaIdNumerico = parseInt(prova_id, 10);
         if (!Number.isInteger(provaIdNumerico) || provaIdNumerico !== provaEsperada.id) {
             return res.status(403).json({
-                error: `Matrícula final ${ultimoDigito} deve realizar a ${indiceEsperado + 1} (${provaEsperada.titulo_aluno}).`
+                error: `Esta matrícula deve realizar a prova: ${provaEsperada.titulo_aluno}.`
             });
         }
 
