@@ -82,9 +82,10 @@ function renderizarPainelSetupPlanilha() {
             <div id="planilhaSetupStatus" class="planilha-status"></div>
             <div id="planilhaSetupAcoes" class="planilha-acoes hidden">
                 <button type="button" class="btn btn-secondary btn-sm" onclick="criarNovaPlanilha()">Nova planilha</button>
-                ${googleOk ? `<button type="button" class="btn btn-secondary btn-sm" onclick="abrirPlanilhaExistenteGoogle()">Abrir existente</button>` : ''}
+                ${googleOk && ferramentasConfig?.googleApiKey ? `<button type="button" class="btn btn-secondary btn-sm" onclick="abrirPlanilhaExistenteGoogle()">Abrir existente</button>` : ''}
                 ${microsoftOk ? `<button type="button" class="btn btn-secondary btn-sm" onclick="abrirPlanilhaExistenteMicrosoft()">Abrir existente</button>` : ''}
             </div>
+            ${googleOk && !ferramentasConfig?.googleApiKey ? `<p class="text-muted" style="font-size:0.8rem;margin-top:0.5rem;">Use <strong>Nova planilha</strong> para criar e editar. Para abrir arquivo que já existe no Drive, o professor precisa configurar a API Key no Railway.</p>` : ''}
         </div>
     `;
 }
