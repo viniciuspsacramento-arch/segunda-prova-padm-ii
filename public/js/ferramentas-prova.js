@@ -8,6 +8,8 @@ let googleTokenClient = null;
 let msalInstance = null;
 let planilhaConectada = false;
 let planilhaProvedor = null;
+let planilhaUrlAtual = null;
+let planilhaPopup = null;
 
 const GOOGLE_SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
@@ -66,11 +68,11 @@ function renderizarPainelSetupPlanilha() {
     painel.innerHTML = `
         <div class="planilha-setup">
             <h4>Sua planilha</h4>
-            <p class="text-muted mb-3">Conecte sua conta para editar e salvar Excel ou Google Sheets sem sair desta página.</p>
+            <p class="text-muted mb-3">Conecte sua conta Google ou Microsoft. O Google Sheets abre em uma <strong>janela ao lado</strong> (o navegador não permite editar dentro da página). Mantenha essa janela aberta durante a prova.</p>
             <div class="planilha-botoes-provedor">
                 ${googleOk ? `
-                    <button type="button" class="btn btn-planilha btn-google" onclick="conectarGooglePlanilha()">
-                        <span class="planilha-icone">G</span> Google Sheets
+                    <button type="button" class="btn btn-planilha btn-google" onclick="iniciarPlanilhaGoogle()">
+                        <span class="planilha-icone">G</span> Google Sheets — abrir planilha
                     </button>
                 ` : ''}
                 ${microsoftOk ? `
@@ -109,29 +111,90 @@ function mostrarAcoesPlanilha() {
 
 function ocultarSetupPlanilha() {
     const setup = document.getElementById('painelPlanilhaSetup');
-    const frame = document.getElementById('planilhaFrame');
     const badge = document.getElementById('planilhaBadgeStatus');
 
     if (setup) setup.classList.add('hidden');
-    if (frame) frame.classList.remove('hidden');
     if (badge) {
         badge.textContent = planilhaProvedor === 'google' ? 'Google Sheets' : 'Excel Online';
         badge.classList.remove('hidden');
     }
 }
 
-function embutirPlanilha(url, provedor) {
-    const frame = document.getElementById('planilhaFrame');
-    if (!frame) return;
+function abrirPlanilhaEmJanela(url) {
+    if (!url) return;
 
-    frame.src = url;
+    const largura = Math.min(1100, Math.floor(window.screen.width * 0.55));
+    const altura = Math.floor(window.screen.height * 0.85);
+    const esquerda = window.screenX + window.outerWidth - largura - 24;
+    const topo = window.screenY + 40;
+    const features = `width=${largura},height=${altura},left=${esquerda},top=${topo},resizable=yes,scrollbars=yes`;
+
+    if (planilhaPopup && !planilhaPopup.closed) {
+        planilhaPopup.location.href = url;
+        planilhaPopup.focus();
+    } else {
+        planilhaPopup = window.open(url, 'planilhaProvaAluno', features);
+    }
+    window.planilhaPopup = planilhaPopup;
+
+    window._focoNaPlanilha = true;
+    if (planilhaPopup) {
+        planilhaPopup.focus();
+    }
+}
+
+function mostrarPainelPlanilhaAtiva(url, provedor) {
+    const frame = document.getElementById('planilhaFrame');
+    const painel = document.getElementById('planilhaPainelAtivo');
+    if (!painel) return;
+
+    frame?.classList.add('hidden');
+    painel.classList.remove('hidden');
+
+    const titulo = provedor === 'google' ? 'Google Sheets' : 'Excel Online';
+    painel.innerHTML = `
+        <div class="planilha-ativa-card">
+            <h4>${titulo} — aberta</h4>
+            <p class="text-muted">Sua planilha está em uma janela ao lado desta prova. Use <strong>Alt+Tab</strong> (Windows) para alternar entre a prova e a planilha. Não feche a janela da planilha.</p>
+            <button type="button" class="btn btn-primary btn-sm" onclick="reabrirPlanilhaAtual()">↗ Reabrir planilha</button>
+        </div>
+    `;
+
+    planilhaUrlAtual = url;
     planilhaConectada = true;
     planilhaProvedor = provedor;
     ocultarSetupPlanilha();
-    marcarFocoPlanilha(true);
+}
 
-    frame.addEventListener('mouseenter', () => marcarFocoPlanilha(true));
-    frame.addEventListener('focus', () => marcarFocoPlanilha(true));
+function reabrirPlanilhaAtual() {
+    if (planilhaUrlAtual) {
+        abrirPlanilhaEmJanela(planilhaUrlAtual);
+    }
+}
+
+function embutirPlanilha(url, provedor) {
+    planilhaUrlAtual = url;
+    planilhaConectada = true;
+    planilhaProvedor = provedor;
+    ocultarSetupPlanilha();
+
+    // Google bloqueia edição em iframe em sites externos (cookies/segurança)
+    if (provedor === 'google') {
+        abrirPlanilhaEmJanela(url);
+        mostrarPainelPlanilhaAtiva(url, provedor);
+        return;
+    }
+
+    const frame = document.getElementById('planilhaFrame');
+    const painel = document.getElementById('planilhaPainelAtivo');
+    if (frame) {
+        painel?.classList.add('hidden');
+        frame.classList.remove('hidden');
+        frame.src = url;
+        marcarFocoPlanilha(true);
+        frame.addEventListener('mouseenter', () => marcarFocoPlanilha(true));
+        frame.addEventListener('focus', () => marcarFocoPlanilha(true));
+    }
 }
 
 // ============================================
@@ -181,12 +244,29 @@ function obterTokenGoogle() {
     });
 }
 
+async function iniciarPlanilhaGoogle() {
+    planilhaProvedor = 'google';
+    try {
+        setStatusPlanilha('Conectando e criando planilha...', 'info');
+        await obterTokenGoogle();
+        await criarNovaPlanilhaGoogle();
+        setStatusPlanilha('Planilha aberta na janela ao lado. Use Alt+Tab para alternar.', 'success');
+    } catch (error) {
+        console.error('Erro Google:', error);
+        const msg = error.message || 'Não foi possível abrir o Google Sheets. Libere popups e tente de novo.';
+        setStatusPlanilha(msg, 'error');
+        if (msg.includes('popup') || msg.includes('blocked')) {
+            setStatusPlanilha('O navegador bloqueou a janela. Clique no ícone de popup bloqueado na barra de endereço e permita.', 'error');
+        }
+    }
+}
+
 async function conectarGooglePlanilha() {
     try {
         planilhaProvedor = 'google';
         setStatusPlanilha('Conectando conta Google...', 'info');
         await obterTokenGoogle();
-        setStatusPlanilha('Conta Google conectada. Crie ou abra uma planilha.', 'success');
+        setStatusPlanilha('Conta Google conectada. Clique em Nova planilha.', 'success');
         mostrarAcoesPlanilha();
     } catch (error) {
         console.error('Erro Google:', error);
@@ -210,11 +290,13 @@ async function criarNovaPlanilhaGoogle() {
     });
 
     if (!response.ok) {
-        throw new Error('Erro ao criar planilha no Google Sheets');
+        const errBody = await response.json().catch(() => ({}));
+        const msg = errBody.error?.message || `Erro ${response.status} ao criar planilha`;
+        throw new Error(msg);
     }
 
     const data = await response.json();
-    const url = `https://docs.google.com/spreadsheets/d/${data.spreadsheetId}/edit?rm=minimal`;
+    const url = `https://docs.google.com/spreadsheets/d/${data.spreadsheetId}/edit`;
     embutirPlanilha(url, 'google');
 }
 
@@ -463,12 +545,24 @@ function marcarFocoPlanilha(ativo) {
 function resetarFerramentasProva() {
     planilhaConectada = false;
     planilhaProvedor = null;
+    planilhaUrlAtual = null;
     googleAccessToken = null;
     window._focoNaPlanilha = false;
+
+    if (planilhaPopup && !planilhaPopup.closed) {
+        planilhaPopup.close();
+    }
+    planilhaPopup = null;
 
     const frame = document.getElementById('planilhaFrame');
     if (frame) {
         frame.src = 'about:blank';
         frame.classList.add('hidden');
+    }
+
+    const painel = document.getElementById('planilhaPainelAtivo');
+    if (painel) {
+        painel.classList.add('hidden');
+        painel.innerHTML = '';
     }
 }

@@ -984,6 +984,24 @@ tr:hover {
     background: #fff;
 }
 
+.planilha-painel-ativo {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.planilha-ativa-card {
+    padding: 1rem;
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: var(--radius-md);
+}
+
+.planilha-ativa-card h4 {
+    margin-bottom: 0.5rem;
+    color: var(--success);
+}
+
 #realizandoProva.no-select .prova-col-planilha {
     user-select: auto;
     -webkit-user-select: auto;

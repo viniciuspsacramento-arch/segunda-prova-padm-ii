@@ -181,7 +181,8 @@ function montarLayoutProva(nomeAluno) {
                     </button>
                 </div>
                 <div id="painelPlanilhaSetup"></div>
-                <iframe id="planilhaFrame" class="planilha-frame hidden" title="Planilha do aluno" allow="clipboard-read; clipboard-write"></iframe>
+                <div id="planilhaPainelAtivo" class="planilha-painel-ativo hidden"></div>
+                <iframe id="planilhaFrame" class="planilha-frame hidden" title="Planilha do aluno" allow="clipboard-read; clipboard-write; fullscreen"></iframe>
             </div>
         </div>
     `;
@@ -255,7 +256,8 @@ function desativarProtecoes() {
 }
 
 function handleVisibilityChange() {
-    if (document.hidden && tentativaAtual && !window._focoNaPlanilha) {
+    const popupPlanilhaAberto = window.planilhaPopup && !window.planilhaPopup.closed;
+    if (document.hidden && tentativaAtual && !window._focoNaPlanilha && !popupPlanilhaAberto) {
         registrarTrocaAba();
     }
 }
