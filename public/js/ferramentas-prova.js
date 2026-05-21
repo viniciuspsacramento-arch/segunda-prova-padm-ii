@@ -74,6 +74,9 @@ function renderizarPainelSetupPlanilha() {
                     <button type="button" class="btn btn-planilha btn-google" onclick="iniciarPlanilhaGoogle()">
                         <span class="planilha-icone">G</span> Google Sheets — abrir planilha
                     </button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="abrirGoogleSheetsModoSimples()">
+                        Abrir planilha em branco (sempre funciona)
+                    </button>
                 ` : ''}
                 ${microsoftOk ? `
                     <button type="button" class="btn btn-planilha btn-microsoft" onclick="conectarMicrosoftPlanilha()">
@@ -121,7 +124,7 @@ function ocultarSetupPlanilha() {
 }
 
 function abrirPlanilhaEmJanela(url) {
-    if (!url) return;
+    if (!url) return null;
 
     const largura = Math.min(1100, Math.floor(window.screen.width * 0.55));
     const altura = Math.floor(window.screen.height * 0.85);
@@ -141,6 +144,7 @@ function abrirPlanilhaEmJanela(url) {
     if (planilhaPopup) {
         planilhaPopup.focus();
     }
+    return planilhaPopup;
 }
 
 function mostrarPainelPlanilhaAtiva(url, provedor) {
@@ -244,6 +248,29 @@ function obterTokenGoogle() {
     });
 }
 
+function traduzirErroGoogle(status, errBody, fallback) {
+    const msg = errBody?.error?.message || fallback || '';
+    if (status === 403 || /forbidden|access not|não autorizado|unauthorized/i.test(msg)) {
+        return 'Google negou acesso. Ative a Google Sheets API no Cloud, adicione seu e-mail em OAuth → Test users, e tente de novo. Ou use o botão "planilha em branco".';
+    }
+    if (/not enabled|has not been used/i.test(msg)) {
+        return 'Ative a Google Sheets API na Biblioteca do Google Cloud e aguarde 2 minutos.';
+    }
+    return msg || 'Erro ao conectar com o Google.';
+}
+
+function abrirGoogleSheetsModoSimples() {
+    planilhaProvedor = 'google';
+    const url = 'https://docs.google.com/spreadsheets/create';
+    const popup = abrirPlanilhaEmJanela(url);
+    if (!popup) {
+        setStatusPlanilha('Permita popups neste site (ícone na barra de endereço) e clique de novo.', 'error');
+        return;
+    }
+    mostrarPainelPlanilhaAtiva(url, 'google');
+    setStatusPlanilha('Planilha aberta ao lado. Faça login no Google se pedir.', 'success');
+}
+
 async function iniciarPlanilhaGoogle() {
     planilhaProvedor = 'google';
     try {
@@ -253,11 +280,8 @@ async function iniciarPlanilhaGoogle() {
         setStatusPlanilha('Planilha aberta na janela ao lado. Use Alt+Tab para alternar.', 'success');
     } catch (error) {
         console.error('Erro Google:', error);
-        const msg = error.message || 'Não foi possível abrir o Google Sheets. Libere popups e tente de novo.';
-        setStatusPlanilha(msg, 'error');
-        if (msg.includes('popup') || msg.includes('blocked')) {
-            setStatusPlanilha('O navegador bloqueou a janela. Clique no ícone de popup bloqueado na barra de endereço e permita.', 'error');
-        }
+        setStatusPlanilha('Não foi possível criar pela API. Abrindo planilha em branco...', 'info');
+        abrirGoogleSheetsModoSimples();
     }
 }
 
@@ -291,8 +315,7 @@ async function criarNovaPlanilhaGoogle() {
 
     if (!response.ok) {
         const errBody = await response.json().catch(() => ({}));
-        const msg = errBody.error?.message || `Erro ${response.status} ao criar planilha`;
-        throw new Error(msg);
+        throw new Error(traduzirErroGoogle(response.status, errBody, `Erro ${response.status} ao criar planilha`));
     }
 
     const data = await response.json();
