@@ -10,6 +10,9 @@ let planilhaConectada = false;
 let planilhaProvedor = null;
 let planilhaUrlAtual = null;
 let planilhaPopup = null;
+let planilhaMonitorTimer = null;
+let planilhaGoogleFileIdMonitor = null;
+const permissoesCompartilhamentoReportadas = new Set();
 
 const GOOGLE_SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
@@ -176,6 +179,73 @@ function reabrirPlanilhaAtual() {
     }
 }
 
+function extrairIdPlanilhaGoogle(url) {
+    if (!url) return null;
+    const m = String(url).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    return m ? m[1] : null;
+}
+
+function pararMonitoramentoCompartilhamento() {
+    if (planilhaMonitorTimer) {
+        clearInterval(planilhaMonitorTimer);
+        planilhaMonitorTimer = null;
+    }
+    planilhaGoogleFileIdMonitor = null;
+    permissoesCompartilhamentoReportadas.clear();
+}
+
+async function verificarCompartilhamentoGoogle(fileId) {
+    if (!fileId || typeof window.reportarCompartilhamentoPlanilha !== 'function') return;
+
+    try {
+        const token = googleAccessToken || (await obterTokenGoogle());
+        const permRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,type,role,emailAddress)`,
+            { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!permRes.ok) return;
+
+        const permData = await permRes.json();
+        for (const p of permData.permissions || []) {
+            const suspeito =
+                p.type === 'anyone' ||
+                p.type === 'domain' ||
+                (p.type === 'user' && p.role && p.role !== 'owner');
+
+            if (!suspeito || permissoesCompartilhamentoReportadas.has(p.id)) continue;
+
+            permissoesCompartilhamentoReportadas.add(p.id);
+
+            let detalhes = `Permissão ${p.type}`;
+            if (p.type === 'anyone') detalhes = 'Link público ou “qualquer pessoa com o link”';
+            else if (p.type === 'domain') detalhes = 'Compartilhamento com domínio inteiro';
+            else if (p.type === 'user') {
+                detalhes = `Convidou ${p.emailAddress || 'outro usuário'} (${p.role || 'acesso'})`;
+            }
+
+            await window.reportarCompartilhamentoPlanilha({
+                tipo: 'google_drive',
+                detalhes,
+                planilha_id: fileId
+            });
+        }
+    } catch (err) {
+        console.warn('Monitor de compartilhamento:', err);
+    }
+}
+
+function iniciarMonitoramentoCompartilhamentoGoogle(fileId) {
+    if (!fileId) return;
+    pararMonitoramentoCompartilhamento();
+    planilhaGoogleFileIdMonitor = fileId;
+    verificarCompartilhamentoGoogle(fileId);
+    planilhaMonitorTimer = setInterval(() => {
+        if (planilhaGoogleFileIdMonitor === fileId) {
+            verificarCompartilhamentoGoogle(fileId);
+        }
+    }, 45000);
+}
+
 function embutirPlanilha(url, provedor) {
     planilhaUrlAtual = url;
     planilhaConectada = true;
@@ -186,6 +256,8 @@ function embutirPlanilha(url, provedor) {
     if (provedor === 'google') {
         abrirPlanilhaEmJanela(url);
         mostrarPainelPlanilhaAtiva(url, provedor);
+        const fileId = extrairIdPlanilhaGoogle(url);
+        if (fileId) iniciarMonitoramentoCompartilhamentoGoogle(fileId);
         return;
     }
 
@@ -370,9 +442,12 @@ async function abrirSeletorGooglePlanilha() {
         .addView(new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
             .setIncludeFolders(false)
             .setSelectFolderEnabled(false))
-        .setCallback((data) => {
+        .setCallback(async (data) => {
             if (data.action === google.picker.Action.PICKED && data.docs?.[0]) {
                 const doc = data.docs[0];
+                try {
+                    await restringirCompartilhamentoGoogle(token, doc.id);
+                } catch (_) { /* segue mesmo se falhar */ }
                 const url = `https://docs.google.com/spreadsheets/d/${doc.id}/edit?rm=minimal`;
                 embutirPlanilha(url, 'google');
             }
@@ -581,6 +656,7 @@ function marcarFocoPlanilha(ativo) {
 }
 
 function resetarFerramentasProva() {
+    pararMonitoramentoCompartilhamento();
     planilhaConectada = false;
     planilhaProvedor = null;
     planilhaUrlAtual = null;

@@ -68,6 +68,35 @@ function buildHtmlEmail(tentativa, respostas) {
   </div>`;
 }
 
+async function enviarEmailProfessor(assunto, html) {
+    const professorEmail = String(process.env.PROFESSOR_EMAIL || '').trim();
+    if (!professorEmail) {
+        console.warn('[alerta] PROFESSOR_EMAIL não definido — e-mail ao professor não enviado');
+        return false;
+    }
+
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = Number(process.env.SMTP_PORT || 587);
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const smtpFrom = process.env.SMTP_FROM || smtpUser;
+
+    if (!smtpHost || !smtpUser || !smtpPass || !smtpFrom) {
+        console.warn('[alerta] SMTP incompleto — e-mail ao professor não enviado');
+        return false;
+    }
+
+    const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465,
+        auth: { user: smtpUser, pass: smtpPass },
+    });
+
+    await transporter.sendMail({ from: smtpFrom, to: professorEmail, subject: assunto, html });
+    return true;
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const TURMA_PROVAS_TITULOS = ['Prova I', 'Prova II', 'Prova III', 'Prova IV', 'Prova V'];
@@ -306,6 +335,19 @@ async function verificarECorrigirBanco() {
             }
         } catch (e) {
             console.error('Erro na migração de email:', e.message);
+        }
+
+        try {
+            const [colsAlerta] = await connection.query("SHOW COLUMNS FROM tentativas LIKE 'alertas_compartilhamento'");
+            if (colsAlerta.length === 0) {
+                console.log('⚠️ Coluna alertas_compartilhamento não encontrada. Adicionando...');
+                await connection.query(
+                    'ALTER TABLE tentativas ADD COLUMN alertas_compartilhamento INT NOT NULL DEFAULT 0'
+                );
+                console.log('✅ Coluna alertas_compartilhamento adicionada!');
+            }
+        } catch (e) {
+            console.error('Erro na migração de alertas_compartilhamento:', e.message);
         }
 
         // 2. Verificar se coluna 'correta' existe na tabela 'respostas'
@@ -1489,6 +1531,71 @@ app.post('/api/tentativas/:id/responder', async (req, res) => {
     } catch (error) {
         console.error('Erro ao registrar resposta:', error);
         res.status(500).json({ error: 'Erro ao registrar resposta' });
+    }
+});
+
+// Alerta: tentativa de compartilhar planilha (monitoramento no navegador do aluno)
+app.post('/api/tentativas/:id/alerta-compartilhamento', async (req, res) => {
+    try {
+        const tentativaId = parseInt(req.params.id, 10);
+        if (!Number.isInteger(tentativaId)) {
+            return res.status(400).json({ error: 'ID de tentativa inválido' });
+        }
+
+        const { tipo, detalhes, planilha_id } = req.body || {};
+
+        const [tentativas] = await promisePool.query(`
+            SELECT t.id, t.nome_aluno, t.matricula, t.email, t.prova_id,
+                   COALESCE(p.titulo_publico, p.titulo) AS prova_titulo
+            FROM tentativas t
+            JOIN provas p ON p.id = t.prova_id
+            WHERE t.id = ?
+        `, [tentativaId]);
+
+        if (tentativas.length === 0) {
+            return res.status(404).json({ error: 'Tentativa não encontrada' });
+        }
+
+        const tentativa = tentativas[0];
+
+        await promisePool.query(
+            'UPDATE tentativas SET alertas_compartilhamento = COALESCE(alertas_compartilhamento, 0) + 1 WHERE id = ?',
+            [tentativaId]
+        );
+
+        const payloadEvento = { tipo, detalhes, planilha_id, em: new Date().toISOString() };
+        try {
+            await promisePool.query(
+                'INSERT INTO eventos_suspeitos (tentativa_id, tipo_evento, detalhes) VALUES (?, ?, ?)',
+                [tentativaId, 'compartilhamento_planilha', JSON.stringify(payloadEvento)]
+            );
+        } catch (e) {
+            console.warn('eventos_suspeitos indisponível:', e.message);
+        }
+
+        const assunto = `[Prova] Compartilhamento de planilha — ${tentativa.nome_aluno}`;
+        const html = `
+  <div style="font-family:Arial,sans-serif;color:#111827;line-height:1.4;">
+    <h2 style="color:#b91c1c;margin:0 0 12px 0;">Alerta: planilha compartilhada ou com acesso extra</h2>
+    <p><strong>Aluno:</strong> ${escapeHtml(tentativa.nome_aluno)}</p>
+    <p><strong>Matrícula:</strong> ${escapeHtml(tentativa.matricula)}</p>
+    <p><strong>E-mail do aluno:</strong> ${escapeHtml(tentativa.email || '-')}</p>
+    <p><strong>Prova:</strong> ${escapeHtml(tentativa.prova_titulo || tentativa.prova_id)}</p>
+    <p><strong>Tentativa ID:</strong> ${tentativaId}</p>
+    <p><strong>Detalhes:</strong> ${escapeHtml(detalhes || tipo || 'Compartilhamento detectado')}</p>
+    ${planilha_id ? `<p><strong>Planilha (ID):</strong> ${escapeHtml(planilha_id)}</p>` : ''}
+    <p style="margin-top:16px;font-size:13px;color:#6b7280;">Verifique também o histórico no painel admin (coluna Compartilhamento).</p>
+  </div>`;
+
+        const emailEnviado = await enviarEmailProfessor(assunto, html);
+
+        res.json({
+            message: 'Alerta registrado',
+            email_professor: emailEnviado
+        });
+    } catch (error) {
+        console.error('Erro ao registrar alerta de compartilhamento:', error);
+        res.status(500).json({ error: 'Erro ao registrar alerta' });
     }
 });
 

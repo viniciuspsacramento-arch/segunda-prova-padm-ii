@@ -11,6 +11,19 @@ let tempoRestante = 0;
 let tempoInicio = null;
 let trocasAba = 0;
 
+window.reportarCompartilhamentoPlanilha = async function (payload) {
+    if (!tentativaAtual?.id) return;
+    try {
+        await fetch(`${API_URL}/tentativas/${tentativaAtual.id}/alerta-compartilhamento`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload || {})
+        });
+    } catch (err) {
+        console.warn('Falha ao reportar compartilhamento:', err);
+    }
+};
+
 // ============================================
 // CARREGAR PROVAS DISPONÍVEIS
 // ============================================

@@ -389,7 +389,7 @@ async function carregarHistorico() {
         const tbody = document.getElementById('tabelaHistorico');
 
         if (tentativas.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center">Nenhuma tentativa registrada</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center">Nenhuma tentativa registrada</td></tr>';
             return;
         }
 
@@ -409,6 +409,11 @@ async function carregarHistorico() {
                         title="Informativo apenas: nesta prova é permitido consultar slides e Excel.">
                         ${t.trocas_aba || 0}
                     </span>
+                </td>
+                <td>
+                    ${(t.alertas_compartilhamento || 0) > 0
+                ? `<span class="badge" style="background:#b91c1c;color:#fff;" title="Compartilhamento detectado na planilha">${t.alertas_compartilhamento}</span>`
+                : '<span class="text-muted">0</span>'}
                 </td>
                 <td>${t.tempo_total ? formatarTempo(t.tempo_total) : '-'}</td>
                 <td>
