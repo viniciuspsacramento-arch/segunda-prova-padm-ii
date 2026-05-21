@@ -888,6 +888,11 @@ tr:hover {
     margin-bottom: 0.35rem;
 }
 
+.planilha-upload-btn {
+    width: 100%;
+    max-width: 100%;
+}
+
 .planilha-botoes-provedor {
     display: flex;
     flex-direction: column;

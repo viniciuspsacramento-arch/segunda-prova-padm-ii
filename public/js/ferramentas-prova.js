@@ -13,6 +13,8 @@ let planilhaPopup = null;
 let planilhaMonitorTimer = null;
 let planilhaGoogleFileIdMonitor = null;
 const permissoesCompartilhamentoReportadas = new Set();
+let uploadPlanilhaProvedorPendente = null;
+const PLANILHA_UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
 
 const GOOGLE_SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
@@ -71,19 +73,25 @@ function renderizarPainelSetupPlanilha() {
     painel.innerHTML = `
         <div class="planilha-setup">
             <h4>Sua planilha</h4>
-            <p class="text-muted mb-3">Conecte sua conta Google ou Microsoft. O Google Sheets abre em uma <strong>janela ao lado</strong> (o navegador não permite editar dentro da página). Mantenha essa janela aberta durante a prova.</p>
+            <p class="text-muted mb-3">Conecte sua conta Google ou Microsoft. O Google Sheets abre em uma <strong>janela ao lado</strong> (o navegador não permite editar dentro da página). Você pode <strong>enviar um arquivo do computador</strong> (.xlsx, .xls ou .csv) ou abrir/criar na nuvem. Mantenha a janela da planilha aberta durante a prova.</p>
             <div class="planilha-botoes-provedor">
                 ${googleOk ? `
                     <button type="button" class="btn btn-planilha btn-google" onclick="iniciarPlanilhaGoogle()">
-                        <span class="planilha-icone">G</span> Google Sheets — abrir planilha
+                        <span class="planilha-icone">G</span> Google Sheets — nova planilha
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm planilha-upload-btn" onclick="enviarPlanilhaDoComputadorGoogle()">
+                        ↑ Enviar planilha do computador (Google)
                     </button>
                     <button type="button" class="btn btn-secondary btn-sm" onclick="abrirGoogleSheetsModoSimples()">
-                        Abrir planilha em branco (sempre funciona)
+                        Abrir planilha em branco (sem envio)
                     </button>
                 ` : ''}
                 ${microsoftOk ? `
                     <button type="button" class="btn btn-planilha btn-microsoft" onclick="conectarMicrosoftPlanilha()">
                         <span class="planilha-icone">M</span> Excel Online
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm planilha-upload-btn" onclick="enviarPlanilhaDoComputadorMicrosoft()">
+                        ↑ Enviar planilha do computador (Excel)
                     </button>
                 ` : ''}
             </div>
@@ -93,7 +101,7 @@ function renderizarPainelSetupPlanilha() {
                 ${googleOk && ferramentasConfig?.googleApiKey ? `<button type="button" class="btn btn-secondary btn-sm" onclick="abrirPlanilhaExistenteGoogle()">Abrir existente</button>` : ''}
                 ${microsoftOk ? `<button type="button" class="btn btn-secondary btn-sm" onclick="abrirPlanilhaExistenteMicrosoft()">Abrir existente</button>` : ''}
             </div>
-            ${googleOk && !ferramentasConfig?.googleApiKey ? `<p class="text-muted" style="font-size:0.8rem;margin-top:0.5rem;">Use <strong>Nova planilha</strong> para criar e editar. Para abrir arquivo que já existe no Drive, o professor precisa configurar a API Key no Railway.</p>` : ''}
+            ${googleOk && !ferramentasConfig?.googleApiKey ? `<p class="text-muted" style="font-size:0.8rem;margin-top:0.5rem;">Para <strong>Abrir existente</strong> no Drive (arquivo já na nuvem), o professor precisa configurar a API Key no Railway. <strong>Enviar do computador</strong> funciona sem API Key.</p>` : ''}
         </div>
     `;
 }
@@ -639,6 +647,152 @@ async function abrirPlanilhaExistenteMicrosoft() {
     } catch (error) {
         setStatusPlanilha(error.message || 'Erro ao abrir planilha.', 'error');
     }
+}
+
+function garantirInputArquivoPlanilha() {
+    let input = document.getElementById('planilhaArquivoLocal');
+    if (!input) {
+        input = document.createElement('input');
+        input.type = 'file';
+        input.id = 'planilhaArquivoLocal';
+        input.className = 'hidden';
+        input.accept = '.xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv';
+        input.addEventListener('change', onArquivoPlanilhaLocalSelecionado);
+        document.body.appendChild(input);
+    }
+    return input;
+}
+
+function nomeSeguroPlanilha(nomeOriginal) {
+    const base = String(nomeOriginal || 'planilha')
+        .replace(/[/\\?%*:|"<>]/g, '_')
+        .trim() || 'planilha';
+    return base.length > 120 ? base.slice(0, 120) : base;
+}
+
+async function enviarPlanilhaDoComputadorGoogle() {
+    planilhaProvedor = 'google';
+    uploadPlanilhaProvedorPendente = 'google';
+    try {
+        setStatusPlanilha('Conecte sua conta Google para enviar o arquivo...', 'info');
+        await obterTokenGoogle();
+        const input = garantirInputArquivoPlanilha();
+        input.value = '';
+        input.click();
+    } catch (error) {
+        console.error('Erro ao iniciar envio Google:', error);
+        setStatusPlanilha(error.message || 'Não foi possível conectar ao Google.', 'error');
+        uploadPlanilhaProvedorPendente = null;
+    }
+}
+
+async function enviarPlanilhaDoComputadorMicrosoft() {
+    planilhaProvedor = 'microsoft';
+    uploadPlanilhaProvedorPendente = 'microsoft';
+    try {
+        setStatusPlanilha('Conecte sua conta Microsoft para enviar o arquivo...', 'info');
+        await obterTokenMicrosoft();
+        const input = garantirInputArquivoPlanilha();
+        input.value = '';
+        input.click();
+    } catch (error) {
+        console.error('Erro ao iniciar envio Microsoft:', error);
+        setStatusPlanilha(error.message || 'Não foi possível conectar à Microsoft.', 'error');
+        uploadPlanilhaProvedorPendente = null;
+    }
+}
+
+async function onArquivoPlanilhaLocalSelecionado(ev) {
+    const file = ev.target.files?.[0];
+    const provedor = uploadPlanilhaProvedorPendente;
+    uploadPlanilhaProvedorPendente = null;
+    if (!file || !provedor) return;
+
+    try {
+        if (file.size > PLANILHA_UPLOAD_MAX_BYTES) {
+            throw new Error('Arquivo muito grande. Tamanho máximo: 15 MB.');
+        }
+
+        if (provedor === 'google') {
+            await uploadPlanilhaParaGoogle(file);
+            return;
+        }
+        if (provedor === 'microsoft') {
+            await uploadPlanilhaParaMicrosoft(file);
+        }
+    } catch (error) {
+        console.error('Erro ao enviar planilha:', error);
+        setStatusPlanilha(error.message || 'Erro ao enviar planilha do computador.', 'error');
+    } finally {
+        ev.target.value = '';
+    }
+}
+
+async function uploadPlanilhaParaGoogle(file) {
+    const token = await obterTokenGoogle();
+    const nomeArquivo = nomeSeguroPlanilha(file.name);
+
+    setStatusPlanilha('Enviando arquivo para o Google Drive e convertendo para Planilhas...', 'info');
+
+    const metadata = {
+        name: nomeArquivo.replace(/\.[^.]+$/i, '') + ' — Prova',
+        mimeType: 'application/vnd.google-apps.spreadsheet'
+    };
+
+    const formData = new FormData();
+    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    formData.append('file', file);
+
+    const response = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+        {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData
+        }
+    );
+
+    if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(traduzirErroGoogle(response.status, errBody, 'Erro ao enviar planilha para o Google'));
+    }
+
+    const data = await response.json();
+    await restringirCompartilhamentoGoogle(token, data.id);
+
+    const url = `https://docs.google.com/spreadsheets/d/${data.id}/edit`;
+    embutirPlanilha(url, 'google');
+    ocultarSetupPlanilha();
+    setStatusPlanilha('Planilha enviada e aberta. Use Alt+Tab para alternar.', 'success');
+}
+
+async function uploadPlanilhaParaMicrosoft(file) {
+    const token = await obterTokenMicrosoft();
+    const nomeArquivo = nomeSeguroPlanilha(file.name);
+    const caminho = encodeURIComponent(nomeArquivo);
+
+    setStatusPlanilha('Enviando arquivo para o OneDrive...', 'info');
+
+    const response = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/root:/Prova/${caminho}:/content`,
+        {
+            method: 'PUT',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            },
+            body: file
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error('Erro ao enviar planilha para o OneDrive. Tente novamente.');
+    }
+
+    const item = await response.json();
+    await embutirPlanilhaMicrosoft(token, item.id);
+    ocultarSetupPlanilha();
+    setStatusPlanilha('Planilha enviada e aberta no Excel Online.', 'success');
 }
 
 function alternarPainelPlanilha() {
