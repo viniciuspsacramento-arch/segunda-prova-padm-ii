@@ -159,7 +159,7 @@ function mostrarPainelPlanilhaAtiva(url, provedor) {
     painel.innerHTML = `
         <div class="planilha-ativa-card">
             <h4>${titulo} — aberta</h4>
-            <p class="text-muted">Sua planilha está em uma janela ao lado desta prova. Use <strong>Alt+Tab</strong> (Windows) para alternar entre a prova e a planilha. Não feche a janela da planilha.</p>
+            <p class="text-muted">Sua planilha está em uma janela ao lado desta prova. Use <strong>Alt+Tab</strong> para alternar. <strong>Não compartilhe</strong> esta planilha com outras pessoas (link público desativado).</p>
             <button type="button" class="btn btn-primary btn-sm" onclick="reabrirPlanilhaAtual()">↗ Reabrir planilha</button>
         </div>
     `;
@@ -298,6 +298,37 @@ async function conectarGooglePlanilha() {
     }
 }
 
+async function restringirCompartilhamentoGoogle(token, fileId) {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+        method: 'PATCH',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            writersCanShare: false,
+            copyRequiresWriterPermission: true,
+            viewersCanCopyContent: false
+        })
+    });
+
+    const permRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,type,role)`,
+        { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!permRes.ok) return;
+
+    const permData = await permRes.json();
+    for (const p of permData.permissions || []) {
+        if (p.type === 'anyone' || p.type === 'domain') {
+            await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${p.id}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` }
+            });
+        }
+    }
+}
+
 async function criarNovaPlanilhaGoogle() {
     const token = await obterTokenGoogle();
     const nomeAluno = document.getElementById('nomeAluno')?.value?.trim() || 'Aluno';
@@ -319,6 +350,7 @@ async function criarNovaPlanilhaGoogle() {
     }
 
     const data = await response.json();
+    await restringirCompartilhamentoGoogle(token, data.spreadsheetId);
     const url = `https://docs.google.com/spreadsheets/d/${data.spreadsheetId}/edit`;
     embutirPlanilha(url, 'google');
 }
@@ -433,23 +465,6 @@ async function criarNovaPlanilhaMicrosoft() {
 }
 
 async function embutirPlanilhaMicrosoft(token, itemId) {
-    const linkRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/createLink`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ type: 'embed', scope: 'anonymous' })
-    });
-
-    if (linkRes.ok) {
-        const linkData = await linkRes.json();
-        if (linkData.link?.webUrl) {
-            embutirPlanilha(linkData.link.webUrl, 'microsoft');
-            return;
-        }
-    }
-
     const itemRes = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${itemId}?select=webUrl`, {
         headers: { Authorization: `Bearer ${token}` }
     });
