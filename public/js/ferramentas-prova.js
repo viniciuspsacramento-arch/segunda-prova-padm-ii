@@ -335,8 +335,19 @@ function obterTokenGoogle(opcoes = {}) {
     });
 }
 
+function extrairMensagemErroApi(payload) {
+    if (!payload) return '';
+    if (typeof payload === 'string') return payload;
+    if (payload.error) {
+        if (typeof payload.error === 'string') return payload.error;
+        if (payload.error.message) return payload.error.message;
+    }
+    if (payload.google?.message) return payload.google.message;
+    return '';
+}
+
 function traduzirErroGoogle(status, errBody, fallback, contexto = '') {
-    const msg = errBody?.error?.message || fallback || '';
+    const msg = extrairMensagemErroApi(errBody) || (errBody?.error?.message) || fallback || '';
     const isUpload = contexto === 'upload';
 
     if (/drive/i.test(msg) || /Google Drive API/i.test(msg)) {
@@ -754,72 +765,54 @@ async function onArquivoPlanilhaLocalSelecionado(ev) {
 }
 
 async function driveMultipartUpload(token, file, converterParaPlanilhaGoogle) {
-    const nomeArquivo = nomeSeguroPlanilha(file.name);
-    const metadata = {
-        name: nomeArquivo.replace(/\.[^.]+$/i, '') + ' — Prova'
-    };
-    if (converterParaPlanilhaGoogle) {
-        metadata.mimeType = 'application/vnd.google-apps.spreadsheet';
-    } else {
-        metadata.mimeType = file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    }
-
     const formData = new FormData();
-    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
     formData.append('file', file);
+    formData.append('access_token', token);
+    formData.append('convert', converterParaPlanilhaGoogle ? '1' : '0');
 
-    const response = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,mimeType',
-        {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: formData
-        }
-    );
+    const response = await fetch(`${API_URL}/planilha/google-upload`, {
+        method: 'POST',
+        body: formData
+    });
 
+    const errBody = await response.json().catch(() => ({}));
     if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        const err = new Error(traduzirErroGoogle(response.status, errBody, 'Erro ao enviar planilha para o Google', 'upload'));
+        const err = new Error(
+            traduzirErroGoogle(response.status, errBody, 'Erro ao enviar planilha para o Google', 'upload')
+        );
         err.status = response.status;
         err.errBody = errBody;
+        const detalhe = extrairMensagemErroApi(errBody);
+        if (detalhe && !err.message.includes(detalhe)) {
+            err.message += ` (${detalhe})`;
+        }
         throw err;
     }
 
-    return response.json();
+    return errBody;
 }
 
 async function uploadPlanilhaParaGoogle(file) {
     let token = await obterTokenGoogle();
-    setStatusPlanilha('Enviando arquivo para o Google Drive e convertendo para Planilhas...', 'info');
+    setStatusPlanilha('Enviando arquivo (via servidor da prova) para o Google Drive...', 'info');
 
     const precisaReauth = (err) =>
+        err?.status === 401 ||
         err?.status === 403 ||
-        /drive|not enabled|forbidden|insufficient|scope/i.test(String(err?.message || ''));
+        /token|auth|drive|not enabled|forbidden|insufficient|scope/i.test(String(err?.message || ''));
 
     let data;
     try {
         data = await driveMultipartUpload(token, file, true);
     } catch (err) {
-        if (precisaReauth(err)) {
+        if (precisaReauth(err) && !err._retry) {
             googleAccessToken = null;
-            setStatusPlanilha(
-                'Na tela do Google: use Continuar (app em teste). Sem Continuar = e-mail nao esta em Usuarios de teste ou falta Drive API.',
-                'info'
-            );
+            setStatusPlanilha('Permissao Drive: na tela do Google use Continuar. Tentando login de novo...', 'info');
             token = await obterTokenGoogle({ forceConsent: true });
-            try {
-                data = await driveMultipartUpload(token, file, true);
-            } catch (err2) {
-                setStatusPlanilha('Conversao automatica falhou; enviando arquivo original...', 'info');
-                data = await driveMultipartUpload(token, file, false);
-            }
+            err._retry = true;
+            data = await driveMultipartUpload(token, file, true);
         } else {
-            try {
-                setStatusPlanilha('Conversao automatica falhou; enviando arquivo original...', 'info');
-                data = await driveMultipartUpload(token, file, false);
-            } catch (_) {
-                throw err;
-            }
+            throw err;
         }
     }
 

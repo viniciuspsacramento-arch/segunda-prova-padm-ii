@@ -632,6 +632,100 @@ app.get('/api/config/ferramentas', (req, res) => {
     });
 });
 
+const PLANILHA_UPLOAD_MAX = 15 * 1024 * 1024;
+const uploadPlanilhaMem = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: PLANILHA_UPLOAD_MAX }
+});
+
+function nomeSeguroPlanilhaServidor(nomeOriginal) {
+    const base = String(nomeOriginal || 'planilha')
+        .replace(/[/\\?%*:|"<>]/g, '_')
+        .trim() || 'planilha';
+    return base.length > 120 ? base.slice(0, 120) : base;
+}
+
+async function googleDriveMultipartUploadServer(token, buffer, originalName, fileMime, converterParaPlanilha) {
+    const metadata = {
+        name: nomeSeguroPlanilhaServidor(originalName).replace(/\.[^.]+$/i, '') + ' — Prova'
+    };
+    if (converterParaPlanilha) {
+        metadata.mimeType = 'application/vnd.google-apps.spreadsheet';
+    } else {
+        metadata.mimeType = fileMime || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
+
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', new Blob([buffer], { type: fileMime || 'application/octet-stream' }));
+
+    const response = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,mimeType',
+        {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: form
+        }
+    );
+
+    const errBody = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const msg = errBody?.error?.message || `HTTP ${response.status}`;
+        const err = new Error(msg);
+        err.status = response.status;
+        err.google = errBody;
+        throw err;
+    }
+    return errBody;
+}
+
+// Upload planilha do PC → Google Drive (proxy no servidor; evita falhas de upload direto do navegador)
+app.post('/api/planilha/google-upload', uploadPlanilhaMem.single('file'), async (req, res) => {
+    try {
+        const token = String(req.body?.access_token || req.headers['x-google-access-token'] || '').trim();
+        if (!token) {
+            return res.status(400).json({ error: 'Token Google ausente. Faca login na prova e tente de novo.' });
+        }
+        if (!req.file?.buffer?.length) {
+            return res.status(400).json({ error: 'Arquivo nao recebido.' });
+        }
+
+        const converter = req.body?.convert !== '0' && req.body?.convert !== 'false';
+        let data;
+        try {
+            data = await googleDriveMultipartUploadServer(
+                token,
+                req.file.buffer,
+                req.file.originalname,
+                req.file.mimetype,
+                true
+            );
+        } catch (err) {
+            if (err.status === 403 || /drive|forbidden|not enabled/i.test(String(err.message))) {
+                console.warn('[planilha] upload convert falhou, tentando sem conversao:', err.message);
+                data = await googleDriveMultipartUploadServer(
+                    token,
+                    req.file.buffer,
+                    req.file.originalname,
+                    req.file.mimetype,
+                    false
+                );
+            } else {
+                throw err;
+            }
+        }
+
+        res.json({ id: data.id, mimeType: data.mimeType });
+    } catch (error) {
+        console.error('[planilha] google-upload:', error.message, error.google || '');
+        const status = error.status && error.status >= 400 ? error.status : 500;
+        res.status(status).json({
+            error: error.message || 'Erro ao enviar para o Google Drive',
+            google: error.google?.error || null
+        });
+    }
+});
+
 // ============================================
 // AUTENTICAÇÃO
 // ============================================
