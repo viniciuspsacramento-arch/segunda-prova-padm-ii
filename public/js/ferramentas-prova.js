@@ -298,14 +298,19 @@ async function garantirGoogleCarregado() {
     });
 }
 
-function obterTokenGoogle() {
+function obterTokenGoogle(opcoes = {}) {
+    const forceConsent = opcoes.forceConsent === true;
     return new Promise(async (resolve, reject) => {
         try {
             await garantirGoogleCarregado();
 
-            if (googleAccessToken) {
+            if (googleAccessToken && !forceConsent) {
                 resolve(googleAccessToken);
                 return;
+            }
+
+            if (forceConsent) {
+                googleAccessToken = null;
             }
 
             googleTokenClient = google.accounts.oauth2.initTokenClient({
@@ -321,19 +326,36 @@ function obterTokenGoogle() {
                 }
             });
 
-            googleTokenClient.requestAccessToken({ prompt: 'select_account' });
+            googleTokenClient.requestAccessToken({
+                prompt: forceConsent ? 'consent' : 'select_account'
+            });
         } catch (error) {
             reject(error);
         }
     });
 }
 
-function traduzirErroGoogle(status, errBody, fallback) {
+function traduzirErroGoogle(status, errBody, fallback, contexto = '') {
     const msg = errBody?.error?.message || fallback || '';
+    const isUpload = contexto === 'upload';
+
+    if (/drive/i.test(msg) || /Google Drive API/i.test(msg)) {
+        return 'Ative a Google Drive API no Cloud (APIs e serviços → Biblioteca). '
+            + 'Criar planilha nova usa Sheets; enviar arquivo do PC usa Drive.';
+    }
     if (status === 403 || /forbidden|access not|não autorizado|unauthorized/i.test(msg)) {
-        return 'Google negou acesso. Ative a Google Sheets API no Cloud, adicione seu e-mail em OAuth → Test users, e tente de novo. Ou use o botão "planilha em branco".';
+        if (isUpload) {
+            return 'Upload negado pelo Google. Ative a Google Drive API no mesmo projeto do OAuth, '
+                + 'faça login de novo (permissão Drive) e tente outra vez. '
+                + 'Enquanto isso use "Google Sheets — nova planilha" e copie/cole os dados.';
+        }
+        return 'Google negou acesso. Ative Google Sheets API (e Drive API para upload), '
+            + 'confira Usuários de teste no OAuth, e tente de novo.';
     }
     if (/not enabled|has not been used/i.test(msg)) {
+        if (isUpload) {
+            return 'Google Drive API não está ativa neste projeto. Ative na Biblioteca do Cloud e aguarde 2 minutos.';
+        }
         return 'Ative a Google Sheets API na Biblioteca do Google Cloud e aguarde 2 minutos.';
     }
     return msg || 'Erro ao conectar com o Google.';
@@ -674,8 +696,8 @@ async function enviarPlanilhaDoComputadorGoogle() {
     planilhaProvedor = 'google';
     uploadPlanilhaProvedorPendente = 'google';
     try {
-        setStatusPlanilha('Conecte sua conta Google para enviar o arquivo...', 'info');
-        await obterTokenGoogle();
+        setStatusPlanilha('Conecte sua conta Google (permissão Drive para upload)...', 'info');
+        await obterTokenGoogle({ forceConsent: true });
         const input = garantirInputArquivoPlanilha();
         input.value = '';
         input.click();
@@ -728,23 +750,23 @@ async function onArquivoPlanilhaLocalSelecionado(ev) {
     }
 }
 
-async function uploadPlanilhaParaGoogle(file) {
-    const token = await obterTokenGoogle();
+async function driveMultipartUpload(token, file, converterParaPlanilhaGoogle) {
     const nomeArquivo = nomeSeguroPlanilha(file.name);
-
-    setStatusPlanilha('Enviando arquivo para o Google Drive e convertendo para Planilhas...', 'info');
-
     const metadata = {
-        name: nomeArquivo.replace(/\.[^.]+$/i, '') + ' — Prova',
-        mimeType: 'application/vnd.google-apps.spreadsheet'
+        name: nomeArquivo.replace(/\.[^.]+$/i, '') + ' — Prova'
     };
+    if (converterParaPlanilhaGoogle) {
+        metadata.mimeType = 'application/vnd.google-apps.spreadsheet';
+    } else {
+        metadata.mimeType = file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    }
 
     const formData = new FormData();
     formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
     formData.append('file', file);
 
     const response = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,mimeType',
         {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}` },
@@ -754,13 +776,41 @@ async function uploadPlanilhaParaGoogle(file) {
 
     if (!response.ok) {
         const errBody = await response.json().catch(() => ({}));
-        throw new Error(traduzirErroGoogle(response.status, errBody, 'Erro ao enviar planilha para o Google'));
+        const err = new Error(traduzirErroGoogle(response.status, errBody, 'Erro ao enviar planilha para o Google', 'upload'));
+        err.status = response.status;
+        err.errBody = errBody;
+        throw err;
     }
 
-    const data = await response.json();
+    return response.json();
+}
+
+async function uploadPlanilhaParaGoogle(file) {
+    const token = await obterTokenGoogle({ forceConsent: true });
+
+    setStatusPlanilha('Enviando arquivo para o Google Drive e convertendo para Planilhas...', 'info');
+
+    let data;
+    try {
+        data = await driveMultipartUpload(token, file, true);
+    } catch (err) {
+        const msg = String(err?.message || '');
+        const retry =
+            err?.status === 403 ||
+            /drive|not enabled|forbidden/i.test(msg);
+        if (!retry) throw err;
+
+        setStatusPlanilha('Conversão automática falhou; enviando arquivo original...', 'info');
+        data = await driveMultipartUpload(token, file, false);
+    }
+
     await restringirCompartilhamentoGoogle(token, data.id);
 
-    const url = `https://docs.google.com/spreadsheets/d/${data.id}/edit`;
+    const url =
+        data.mimeType === 'application/vnd.google-apps.spreadsheet'
+            ? `https://docs.google.com/spreadsheets/d/${data.id}/edit`
+            : `https://drive.google.com/file/d/${data.id}/view`;
+
     embutirPlanilha(url, 'google');
     ocultarSetupPlanilha();
     setStatusPlanilha('Planilha enviada e aberta. Use Alt+Tab para alternar.', 'success');
