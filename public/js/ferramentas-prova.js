@@ -696,8 +696,11 @@ async function enviarPlanilhaDoComputadorGoogle() {
     planilhaProvedor = 'google';
     uploadPlanilhaProvedorPendente = 'google';
     try {
-        setStatusPlanilha('Conecte sua conta Google (permissão Drive para upload)...', 'info');
-        await obterTokenGoogle({ forceConsent: true });
+        setStatusPlanilha(
+            'Escolha o arquivo. Se o Google mostrar aviso, use Continuar (teste) — nao so Voltar a seguranca. Exige Drive API ativa no Cloud.',
+            'info'
+        );
+        await obterTokenGoogle();
         const input = garantirInputArquivoPlanilha();
         input.value = '';
         input.click();
@@ -786,22 +789,38 @@ async function driveMultipartUpload(token, file, converterParaPlanilhaGoogle) {
 }
 
 async function uploadPlanilhaParaGoogle(file) {
-    const token = await obterTokenGoogle({ forceConsent: true });
-
+    let token = await obterTokenGoogle();
     setStatusPlanilha('Enviando arquivo para o Google Drive e convertendo para Planilhas...', 'info');
+
+    const precisaReauth = (err) =>
+        err?.status === 403 ||
+        /drive|not enabled|forbidden|insufficient|scope/i.test(String(err?.message || ''));
 
     let data;
     try {
         data = await driveMultipartUpload(token, file, true);
     } catch (err) {
-        const msg = String(err?.message || '');
-        const retry =
-            err?.status === 403 ||
-            /drive|not enabled|forbidden/i.test(msg);
-        if (!retry) throw err;
-
-        setStatusPlanilha('Conversão automática falhou; enviando arquivo original...', 'info');
-        data = await driveMultipartUpload(token, file, false);
+        if (precisaReauth(err)) {
+            googleAccessToken = null;
+            setStatusPlanilha(
+                'Na tela do Google: use Continuar (app em teste). Sem Continuar = e-mail nao esta em Usuarios de teste ou falta Drive API.',
+                'info'
+            );
+            token = await obterTokenGoogle({ forceConsent: true });
+            try {
+                data = await driveMultipartUpload(token, file, true);
+            } catch (err2) {
+                setStatusPlanilha('Conversao automatica falhou; enviando arquivo original...', 'info');
+                data = await driveMultipartUpload(token, file, false);
+            }
+        } else {
+            try {
+                setStatusPlanilha('Conversao automatica falhou; enviando arquivo original...', 'info');
+                data = await driveMultipartUpload(token, file, false);
+            } catch (_) {
+                throw err;
+            }
+        }
     }
 
     await restringirCompartilhamentoGoogle(token, data.id);

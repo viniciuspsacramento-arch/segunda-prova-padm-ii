@@ -17,6 +17,17 @@ Isso **ativa** Sheets, Drive e Picker. Gera `scripts/usuarios_teste_oauth.txt` p
 
 **Upload do computador** exige **Google Drive API** (nao basta Sheets). **Nova planilha** so precisa de Sheets.
 
+## Tela "Google nao verificou este app" sem "Avancado"
+
+O Google mudou a interface. Em app **Em teste**, costuma aparecer:
+
+- **Continuar** (ou "Acessar") = prosseguir (use este)
+- **Voltar a seguranca** = cancela
+
+Se **so** existir "Voltar a seguranca", o e-mail logado **nao** esta em **Usuarios de teste** (mesmo projeto do Client ID) ou a conta e Workspace com bloqueio de apps de terceiros.
+
+**Plano B (sem upload):** Nova planilha → no Google Sheets: Arquivo → Importar → Upload → escolher o .xlsx do PC.
+
 ## Passo manual obrigatorio (30 s)
 
 1. Console → **APIs e servicos** → **Tela de consentimento OAuth**
