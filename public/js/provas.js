@@ -28,6 +28,19 @@ async function carregarProvas() {
         }
 
         provasCache = await response.json();
+        const configGrupo = typeof obterConfigGrupo === 'function'
+            ? obterConfigGrupo(window.GRUPO_PROVA_PATH)
+            : null;
+        if (configGrupo) {
+            provasCache = provasCache.filter((p) => String(p.titulo || '').includes(configGrupo.prefixoTitulo));
+        } else if (window.GRUPO_PROVA_PATH === 'padrao') {
+            provasCache = provasCache.filter((p) => {
+                const idsOficiais = [17, 26, 27, 28, 29];
+                const prefixosGrupos = Object.values(window.GRUPOS_PROVA || {}).map((g) => g.prefixoTitulo);
+                const ehGrupoExtra = prefixosGrupos.some((prefixo) => String(p.titulo || '').includes(prefixo));
+                return idsOficiais.includes(p.id) || !ehGrupoExtra;
+            });
+        }
         renderizarProvas(provasCache);
 
     } catch (error) {
@@ -128,7 +141,9 @@ async function toggleAtivoProva(id) {
 
 async function verProva(id) {
     try {
-        const response = await fetch(`${API_URL}/provas/${id}?incluir_gabarito=true`);
+        const response = await fetch(`${API_URL}/provas/${id}?incluir_gabarito=true`, {
+            headers: typeof headersAdmin === 'function' ? headersAdmin() : {}
+        });
         const prova = await response.json();
 
         let detalhes = `

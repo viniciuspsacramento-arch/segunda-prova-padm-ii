@@ -601,7 +601,13 @@ tr:hover {
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-xl);
     border: 2px solid var(--primary);
-    z-index: 100;
+    z-index: 5000;
+}
+
+body.material-consulta-aberto .timer {
+    right: auto;
+    left: 1.25rem;
+    top: 1.25rem;
 }
 
 .timer-value {
@@ -648,6 +654,34 @@ tr:hover {
    ============================================ */
 .hidden {
     display: none !important;
+}
+
+html.mode-aluno #mainNav,
+html.mode-aluno #page-dashboard,
+html.mode-aluno #page-questoes,
+html.mode-aluno #page-provas,
+html.mode-aluno #page-historico {
+    display: none !important;
+}
+
+html.mode-aluno #page-realizar-prova {
+    display: block !important;
+}
+
+html.mode-admin #page-realizar-prova {
+    display: none !important;
+}
+
+body.mode-admin-locked #page-realizar-prova,
+body.mode-admin-locked #mainNav,
+body.mode-admin-locked .page,
+body.mode-admin-locked > header,
+body.mode-admin-locked > .container {
+    display: none !important;
+}
+
+body.mode-admin-locked #modalLogin {
+    display: flex !important;
 }
 
 .text-center {
@@ -966,6 +1000,79 @@ tr:hover {
     margin-top: 0.75rem;
 }
 
+.planilha-escolha-titulo {
+    width: 100%;
+    font-size: 0.9rem;
+}
+
+.planilha-travada {
+    margin-top: 0.75rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: 6px;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    font-size: 0.9rem;
+}
+
+.planilha-aviso-inicio {
+    margin-bottom: 0.75rem;
+    padding: 0.65rem 0.75rem;
+    border-radius: var(--radius-md);
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.planilha-aviso-conta {
+    margin-bottom: 0.85rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: var(--radius-md);
+    background: rgba(245, 158, 11, 0.14);
+    border: 1px solid rgba(245, 158, 11, 0.55);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.planilha-aviso-conta strong {
+    color: #fbbf24;
+}
+
+.planilha-aviso-conta p {
+    margin: 0.35rem 0 0;
+}
+
+.material-consulta-viewer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.material-consulta-viewer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.material-consulta-viewer-titulo {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.material-consulta-frame {
+    width: 100%;
+    min-height: 320px;
+    height: 42vh;
+    border: 1px solid var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    background: #fff;
+}
+
 .planilha-lista-arquivos {
     margin-top: 0.75rem;
     display: flex;
@@ -981,6 +1088,7 @@ tr:hover {
 }
 
 .planilha-frame {
+    display: none !important;
     flex: 1;
     width: 100%;
     min-height: 60vh;
@@ -993,6 +1101,11 @@ tr:hover {
     flex: 1;
     display: flex;
     flex-direction: column;
+}
+
+.prova-col-planilha.planilha-em-frente {
+    z-index: 3500;
+    box-shadow: var(--shadow-xl);
 }
 
 .planilha-ativa-card {
@@ -1010,6 +1123,152 @@ tr:hover {
 #realizandoProva.no-select .prova-col-planilha {
     user-select: auto;
     -webkit-user-select: auto;
+}
+
+/* Tabelas do enunciado: aluno pode selecionar e copiar dados para a planilha */
+#realizandoProva.no-select #provaColQuestoes table,
+#realizandoProva.no-select #provaColQuestoes table th,
+#realizandoProva.no-select #provaColQuestoes table td {
+    user-select: text;
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    cursor: text;
+}
+
+.planilha-externa-ativa {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    border-radius: var(--radius-md);
+    background: rgba(0, 120, 212, 0.1);
+    border: 1px solid rgba(0, 120, 212, 0.3);
+    font-size: 0.9rem;
+}
+
+.planilha-externa-ativa p {
+    margin: 0 0 0.5rem 0;
+}
+
+.materiais-consulta-wrap {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--bg-tertiary);
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido .material-consulta-viewer-header {
+    justify-content: center;
+    padding: 0 11rem 0 9rem;
+    min-height: 3.25rem;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido .material-consulta-fechar {
+    position: fixed;
+    top: 1.25rem;
+    right: 1.25rem;
+    z-index: 5001;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido .material-consulta-viewer-titulo {
+    text-align: center;
+    flex: 1;
+    min-width: 0;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido {
+    position: fixed;
+    inset: 0.75rem;
+    z-index: 3000;
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0.75rem;
+    border: 1px solid var(--bg-tertiary);
+    border-radius: var(--radius-lg);
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-xl);
+}
+
+.prova-col-planilha.col-material-aberto {
+    min-height: calc(100vh - 2rem);
+}
+
+.prova-col-planilha.col-material-aberto #painelPlanilhaSetup,
+.prova-col-planilha.col-material-aberto #planilhaPainelAtivo,
+.prova-col-planilha.col-material-aberto #planilhaFrame {
+    display: none !important;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido .materiais-consulta {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido .material-consulta-viewer {
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 0;
+}
+
+.materiais-consulta-wrap.materiais-consulta-expandido .material-consulta-frame {
+    flex: 1;
+    min-height: calc(100vh - 5.5rem);
+    height: calc(100vh - 5.5rem);
+    width: 100%;
+}
+
+.materiais-consulta-grupo {
+    margin: 0.75rem 0 0.35rem 0;
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.materiais-consulta h4 {
+    margin: 0 0 0.25rem 0;
+    font-size: 0.95rem;
+}
+
+.materiais-consulta-sub {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.8rem;
+}
+
+.materiais-consulta-lista {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.materiais-consulta-lista li {
+    margin-bottom: 0.25rem;
+}
+
+.material-consulta-link {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--primary);
+    font-size: 0.82rem;
+    padding: 0.35rem 0.25rem;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+}
+
+.material-consulta-link:hover {
+    background: rgba(99, 102, 241, 0.12);
 }
 
 @media (max-width: 1024px) {

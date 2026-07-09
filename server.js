@@ -6,7 +6,38 @@ const fs = require('fs');
 const https = require('https');
 const nodemailer = require('nodemailer');
 const { promisePool, dbConfig } = require('./db');
+const { analisarCoorteTriangulacao } = require('./lib/triangulacao');
+const {
+    GRUPO_PADRAO: GRUPO_PROVA_PADRAO,
+    GRUPOS_PROVA,
+    obterConfigGrupo,
+    normalizarGrupoProva,
+    obterGrupoPorPath,
+    nomeGrupoParaMensagem
+} = require('./lib/grupos-prova');
+const {
+    exigir2faTelegram,
+    sessaoAdminValida,
+    revogarSessao,
+    registrarSessao,
+    iniciarDesafioTelegram,
+    verificarDesafioTelegram
+} = require('./lib/admin-auth');
 require('dotenv').config();
+
+// Limite de trocas de aba/janela antes de bloquear a prova automaticamente (anti-cópia)
+const LIMITE_TROCAS_ABA = 3;
+
+function extrairTokenAdmin(req) {
+    const auth = req.headers.authorization || '';
+    return auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+}
+
+function exigirAdmin(req, res, next) {
+    const token = extrairTokenAdmin(req);
+    if (sessaoAdminValida(token)) return next();
+    return res.status(401).json({ error: 'Acesso restrito ao professor' });
+}
 
 function escapeHtml(v) {
     return String(v ?? '')
@@ -98,6 +129,7 @@ async function enviarEmailProfessor(assunto, html) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 const TURMA_PROVAS_TITULOS = ['Prova I', 'Prova II', 'Prova III', 'Prova IV', 'Prova V'];
 // NOTA: IDs fixos mantidos como fallback, mas o sistema agora usa a coluna 'ativo' da tabela provas.
@@ -113,6 +145,27 @@ const ALUNO_ALLOWED_IP_PREFIXES = String(process.env.ALUNO_ALLOWED_IP_PREFIXES |
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
+const CAMPUS_CIDADES = String(process.env.CAMPUS_CIDADES || 'Juazeiro do Norte,Crato')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+const EXIGIR_GPS_PROVA = !['0', 'false', 'nao', 'não', 'no'].includes(String(process.env.EXIGIR_GPS_PROVA || 'true').toLowerCase());
+let gpsEmergenciaDesligado = false;
+
+function exigirGpsProvaAgora() {
+    return EXIGIR_GPS_PROVA && !gpsEmergenciaDesligado;
+}
+const CAMPUS_GPS_RAIO_KM = parseFloat(process.env.CAMPUS_GPS_RAIO_KM || '35');
+const CAMPUS_GPS_PONTOS = String(process.env.CAMPUS_GPS_PONTOS || '-7.2137,-39.3153;-7.2339,-39.4094')
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((par) => {
+        const [lat, lon] = par.split(',').map((v) => Number(String(v).trim()));
+        return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+    })
+    .filter(Boolean);
+const TRIANGULACAO_MIN_CLUSTER = parseInt(process.env.TRIANGULACAO_MIN_CLUSTER || '3', 10);
 const LOGIN_MAX_TENTATIVAS = parseInt(process.env.ADMIN_LOGIN_MAX_TENTATIVAS || '4', 10);
 const LOGIN_BLOQUEIO_MINUTOS = parseInt(process.env.ADMIN_LOGIN_BLOQUEIO_MINUTOS || '30', 10);
 const adminLoginEstadoPorIp = new Map();
@@ -207,23 +260,105 @@ async function validarOrigemAluno(req) {
     };
 }
 
-function obterIndiceProvaPorFinalMatricula(ultimoDigito) {
-    if ([0, 1].includes(ultimoDigito)) return 0; // Prova 1
-    if ([2, 3].includes(ultimoDigito)) return 1; // Prova 2
-    if ([4, 5].includes(ultimoDigito)) return 2; // Prova 3
-    if ([6, 7].includes(ultimoDigito)) return 3; // Prova 4
-    return 4; // 8 ou 9 -> Prova 5
+function obterIndiceProvaPorFinalMatricula(ultimoDigito, totalProvas = 5) {
+    if (totalProvas <= 1) return 0;
+    // Distribui os 10 finais de matrícula (0–9) entre N provas ativas
+    return Math.min(Math.floor(ultimoDigito * totalProvas / 10), totalProvas - 1);
 }
 
-async function buscarProvasAtivasDaTurma(connection) {
-    // Busca provas com ativo=1, ordenadas por ID
+function obterGrupoProvaReq(req) {
+    return normalizarGrupoProva(req.query?.grupo || req.body?.grupo_prova);
+}
+
+function validarConfiguracaoProvasTurma(provasAtivas, grupo = GRUPO_PROVA_PADRAO) {
+    const n = provasAtivas.length;
+    if (n === 1 || n === 5) return { ok: true };
+    const nomeGrupo = nomeGrupoParaMensagem(grupo);
+    if (n === 0) {
+        return { ok: false, error: 'Nenhuma prova está ativa no momento. Contate o professor.' };
+    }
+    return {
+        ok: false,
+        error: `Configuração inválida: deve haver 1 ou 5 provas ativas (${nomeGrupo}), encontrado ${n}. Contate o professor.`
+    };
+}
+
+async function buscarProvasAtivasDaTurma(connection, grupo = GRUPO_PROVA_PADRAO) {
+    const config = obterConfigGrupo(grupo);
+    if (config) {
+        const [rows] = await connection.query(
+            `SELECT id, COALESCE(NULLIF(titulo_publico, ''), titulo) AS titulo_aluno, ativo
+             FROM provas
+             WHERE ativo = 1 AND titulo LIKE ?
+             ORDER BY titulo ASC, id ASC`,
+            [`${config.prefixoTitulo}%`]
+        );
+        return rows;
+    }
+
+    const placeholders = TURMA_PROVAS_IDS_FIXOS.map(() => '?').join(',');
     const [rows] = await connection.query(
-        `SELECT id, COALESCE(NULLIF(titulo_publico, ''), titulo) AS titulo_aluno
+        `SELECT id, COALESCE(NULLIF(titulo_publico, ''), titulo) AS titulo_aluno, ativo
          FROM provas
-         WHERE ativo = 1
-         ORDER BY id ASC`
+         WHERE id IN (${placeholders})
+         ORDER BY FIELD(id, ${placeholders})`,
+        [...TURMA_PROVAS_IDS_FIXOS, ...TURMA_PROVAS_IDS_FIXOS]
     );
-    return rows;
+    return rows.filter((r) => r.ativo === 1);
+}
+
+async function obterStatusConfigProvasTurma(connection, grupo = GRUPO_PROVA_PADRAO) {
+    const config = obterConfigGrupo(grupo);
+    if (config) {
+        const [rows] = await connection.query(
+            `SELECT id, COALESCE(NULLIF(titulo_publico, ''), titulo) AS titulo, ativo
+             FROM provas
+             WHERE titulo LIKE ?
+             ORDER BY titulo ASC, id ASC`,
+            [`${config.prefixoTitulo}%`]
+        );
+        const ativas = rows.filter((r) => r.ativo === 1);
+        const validacao = validarConfiguracaoProvasTurma(ativas, grupo);
+        return {
+            grupo,
+            ids_fixos: rows.map((r) => r.id),
+            total_ativas: ativas.length,
+            provas: rows.map((r) => ({ id: r.id, titulo: r.titulo, ativo: !!r.ativo })),
+            ok: validacao.ok,
+            aviso: validacao.ok ? null : validacao.error
+        };
+    }
+
+    const placeholders = TURMA_PROVAS_IDS_FIXOS.map(() => '?').join(',');
+    const [rows] = await connection.query(
+        `SELECT id, COALESCE(NULLIF(titulo_publico, ''), titulo) AS titulo, ativo
+         FROM provas
+         WHERE id IN (${placeholders})
+         ORDER BY FIELD(id, ${placeholders})`,
+        [...TURMA_PROVAS_IDS_FIXOS, ...TURMA_PROVAS_IDS_FIXOS]
+    );
+    const ativas = rows.filter((r) => r.ativo === 1);
+    const validacao = validarConfiguracaoProvasTurma(ativas);
+    return {
+        grupo: GRUPO_PROVA_PADRAO,
+        ids_fixos: TURMA_PROVAS_IDS_FIXOS,
+        total_ativas: ativas.length,
+        provas: rows.map((r) => ({ id: r.id, titulo: r.titulo, ativo: !!r.ativo })),
+        ok: validacao.ok,
+        aviso: validacao.ok ? null : validacao.error
+    };
+}
+
+async function buscarIdsProvasDoGrupo(connection, grupo = GRUPO_PROVA_PADRAO) {
+    const config = obterConfigGrupo(grupo);
+    if (config) {
+        const [rows] = await connection.query(
+            `SELECT id FROM provas WHERE titulo LIKE ? ORDER BY titulo ASC, id ASC`,
+            [`${config.prefixoTitulo}%`]
+        );
+        return rows.map((r) => r.id);
+    }
+    return [...TURMA_PROVAS_IDS_FIXOS];
 }
 
 // Expande lista de questoes para incluir vinculadas (original + auxiliares)
@@ -325,6 +460,18 @@ async function verificarECorrigirBanco() {
             console.error('Erro na migração de matricula:', e.message);
         }
 
+        try {
+            const [idx] = await connection.query("SHOW INDEX FROM tentativas WHERE Key_name = 'idx_matricula_unica'");
+            if (idx.length > 0) {
+                console.log('⚠️ Índice único global de matrícula encontrado. Removendo para permitir múltiplos grupos de prova...');
+                await connection.query('DROP INDEX idx_matricula_unica ON tentativas');
+                await connection.query('CREATE INDEX idx_tentativas_matricula ON tentativas(matricula)');
+                console.log('✅ Matrícula agora é validada por grupo de prova no código');
+            }
+        } catch (e) {
+            console.error('Erro ao ajustar índice de matrícula:', e.message);
+        }
+
         // 1.1 Verificar se coluna 'email' existe na tabela 'tentativas'
         try {
             const [colsEmail] = await connection.query("SHOW COLUMNS FROM tentativas LIKE 'email'");
@@ -348,6 +495,34 @@ async function verificarECorrigirBanco() {
             }
         } catch (e) {
             console.error('Erro na migração de alertas_compartilhamento:', e.message);
+        }
+
+        const colunasTriangulacaoPlanilha = [
+            ['ip_origem', "ALTER TABLE tentativas ADD COLUMN ip_origem VARCHAR(45) NULL AFTER tempo_total"],
+            ['user_agent', "ALTER TABLE tentativas ADD COLUMN user_agent TEXT NULL AFTER ip_origem"],
+            ['geo_pais', "ALTER TABLE tentativas ADD COLUMN geo_pais VARCHAR(8) NULL AFTER user_agent"],
+            ['geo_estado', "ALTER TABLE tentativas ADD COLUMN geo_estado VARCHAR(16) NULL AFTER geo_pais"],
+            ['geo_cidade', "ALTER TABLE tentativas ADD COLUMN geo_cidade VARCHAR(120) NULL AFTER geo_estado"],
+            ['planilha_usada', "ALTER TABLE tentativas ADD COLUMN planilha_usada TINYINT(1) NOT NULL DEFAULT 0 AFTER geo_cidade"],
+            ['planilha_url', "ALTER TABLE tentativas ADD COLUMN planilha_url VARCHAR(500) NULL AFTER planilha_usada"],
+            ['planilha_nome', "ALTER TABLE tentativas ADD COLUMN planilha_nome VARCHAR(255) NULL AFTER planilha_url"],
+            ['planilha_item_id', "ALTER TABLE tentativas ADD COLUMN planilha_item_id VARCHAR(128) NULL AFTER planilha_nome"],
+            ['gps_latitude', "ALTER TABLE tentativas ADD COLUMN gps_latitude DECIMAL(10,7) NULL AFTER planilha_item_id"],
+            ['gps_longitude', "ALTER TABLE tentativas ADD COLUMN gps_longitude DECIMAL(10,7) NULL AFTER gps_latitude"],
+            ['gps_precisao', "ALTER TABLE tentativas ADD COLUMN gps_precisao DECIMAL(10,2) NULL AFTER gps_longitude"],
+            ['gps_autorizado', "ALTER TABLE tentativas ADD COLUMN gps_autorizado TINYINT(1) NOT NULL DEFAULT 0 AFTER gps_precisao"]
+        ];
+        for (const [nome, ddl] of colunasTriangulacaoPlanilha) {
+            try {
+                const [colsMeta] = await connection.query(`SHOW COLUMNS FROM tentativas LIKE '${nome}'`);
+                if (colsMeta.length === 0) {
+                    console.log(`⚠️ Coluna ${nome} não encontrada. Adicionando...`);
+                    await connection.query(ddl);
+                    console.log(`✅ Coluna ${nome} adicionada!`);
+                }
+            } catch (e) {
+                console.error(`Erro na migração de ${nome}:`, e.message);
+            }
         }
 
         // 2. Verificar se coluna 'correta' existe na tabela 'respostas'
@@ -588,6 +763,21 @@ async function verificarECorrigirBanco() {
             console.error('⚠️ Erro ao recriar trigger:', e.message);
         }
 
+        try {
+            const statusProvas = await obterStatusConfigProvasTurma(connection);
+            if (statusProvas.ok) {
+                console.log(`✅ Provas da turma: ${statusProvas.total_ativas} ativa(s) (IDs ${TURMA_PROVAS_IDS_FIXOS.join(', ')})`);
+            } else {
+                console.warn(`⚠️ ${statusProvas.aviso}`);
+                const inativas = statusProvas.provas.filter((p) => !p.ativo).map((p) => `${p.titulo} (ID ${p.id})`);
+                if (inativas.length) {
+                    console.warn(`   Provas inativas na turma: ${inativas.join(', ')}`);
+                }
+            }
+        } catch (e) {
+            console.warn('⚠️ Não foi possível verificar configuração das provas da turma:', e.message);
+        }
+
         connection.release();
         console.log('🚀 Banco de dados pronto e corrigido!');
     } catch (error) {
@@ -601,9 +791,66 @@ verificarECorrigirBanco();
 // Middlewares
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
 
-// Rota de Diagnóstico (Healthcheck)
+app.use((req, res, next) => {
+    const proto = req.headers['x-forwarded-proto'];
+    if (proto && proto !== 'https' && req.method === 'GET') {
+        return res.redirect(301, `https://${req.headers.host}${req.originalUrl}`);
+    }
+    next();
+});
+
+app.use(express.static('public', {
+    maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0,
+    setHeaders(res, filePath) {
+        if (filePath.endsWith('index.html') || filePath.endsWith(`${path.sep}auth${path.sep}microsoft.html`)) {
+            res.setHeader('Cache-Control', 'no-store');
+            return;
+        }
+        if (filePath.includes(`${path.sep}vendor${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+        }
+    }
+}));
+
+for (const config of Object.values(GRUPOS_PROVA)) {
+    app.get(config.path, (req, res) => {
+        res.setHeader('Cache-Control', 'no-store');
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    });
+}
+
+app.get('/api/config/prova-aluno', (req, res) => {
+    res.json({
+        exigir_gps: exigirGpsProvaAgora(),
+        gps_apenas_triangulacao: true
+    });
+});
+
+app.get('/api/admin/config/gps', exigirAdmin, (req, res) => {
+    res.json({
+        exigir_gps: exigirGpsProvaAgora(),
+        gps_emergencia_desligado: gpsEmergenciaDesligado,
+        gps_env_padrao: EXIGIR_GPS_PROVA
+    });
+});
+
+app.post('/api/admin/config/gps-emergencia', exigirAdmin, (req, res) => {
+    const desligar = req.body?.desligar === true
+        || req.body?.desligar === 1
+        || req.body?.desligar === '1'
+        || req.body?.desligar === 'true';
+
+    gpsEmergenciaDesligado = desligar;
+    console.log(`[GPS emergência] ${desligar ? 'DESLIGADO' : 'REATIVADO'} por admin`);
+
+    res.json({
+        success: true,
+        exigir_gps: exigirGpsProvaAgora(),
+        gps_emergencia_desligado: gpsEmergenciaDesligado
+    });
+});
+
 app.get('/api/healthcheck', async (req, res) => {
     try {
         const [rows] = await promisePool.query('SELECT 1 as val');
@@ -622,108 +869,23 @@ app.get('/api/healthcheck', async (req, res) => {
     }
 });
 
-// Config pública para Google Sheets / Excel Online na prova
+// Config pública para Excel Online na prova (somente Microsoft)
 app.get('/api/config/ferramentas', (req, res) => {
+    const redirectUri = (process.env.MICROSOFT_REDIRECT_URI
+        || 'https://prova-final-adm-production.up.railway.app/auth/microsoft.html')
+        .replace(/\/$/, '');
+
+    const professorEmail = String(
+        process.env.MICROSOFT_PROFESSOR_EMAIL || process.env.PROFESSOR_EMAIL || ''
+    ).trim();
+
     res.json({
-        googleClientId: process.env.GOOGLE_CLIENT_ID || '',
-        googleApiKey: process.env.GOOGLE_API_KEY || '',
         microsoftClientId: process.env.MICROSOFT_CLIENT_ID || '',
-        microsoftTenantId: process.env.MICROSOFT_TENANT_ID || 'common'
+        microsoftTenantId: process.env.MICROSOFT_TENANT_ID || 'common',
+        microsoftRedirectUri: redirectUri,
+        professorEmail,
+        microsoftProfessorEmail: professorEmail
     });
-});
-
-const PLANILHA_UPLOAD_MAX = 15 * 1024 * 1024;
-const uploadPlanilhaMem = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: PLANILHA_UPLOAD_MAX }
-});
-
-function nomeSeguroPlanilhaServidor(nomeOriginal) {
-    const base = String(nomeOriginal || 'planilha')
-        .replace(/[/\\?%*:|"<>]/g, '_')
-        .trim() || 'planilha';
-    return base.length > 120 ? base.slice(0, 120) : base;
-}
-
-async function googleDriveMultipartUploadServer(token, buffer, originalName, fileMime, converterParaPlanilha) {
-    const metadata = {
-        name: nomeSeguroPlanilhaServidor(originalName).replace(/\.[^.]+$/i, '') + ' — Prova'
-    };
-    if (converterParaPlanilha) {
-        metadata.mimeType = 'application/vnd.google-apps.spreadsheet';
-    } else {
-        metadata.mimeType = fileMime || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    }
-
-    const form = new FormData();
-    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    form.append('file', new Blob([buffer], { type: fileMime || 'application/octet-stream' }));
-
-    const response = await fetch(
-        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,mimeType',
-        {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-            body: form
-        }
-    );
-
-    const errBody = await response.json().catch(() => ({}));
-    if (!response.ok) {
-        const msg = errBody?.error?.message || `HTTP ${response.status}`;
-        const err = new Error(msg);
-        err.status = response.status;
-        err.google = errBody;
-        throw err;
-    }
-    return errBody;
-}
-
-// Upload planilha do PC → Google Drive (proxy no servidor; evita falhas de upload direto do navegador)
-app.post('/api/planilha/google-upload', uploadPlanilhaMem.single('file'), async (req, res) => {
-    try {
-        const token = String(req.body?.access_token || req.headers['x-google-access-token'] || '').trim();
-        if (!token) {
-            return res.status(400).json({ error: 'Token Google ausente. Faca login na prova e tente de novo.' });
-        }
-        if (!req.file?.buffer?.length) {
-            return res.status(400).json({ error: 'Arquivo nao recebido.' });
-        }
-
-        const converter = req.body?.convert !== '0' && req.body?.convert !== 'false';
-        let data;
-        try {
-            data = await googleDriveMultipartUploadServer(
-                token,
-                req.file.buffer,
-                req.file.originalname,
-                req.file.mimetype,
-                true
-            );
-        } catch (err) {
-            if (err.status === 403 || /drive|forbidden|not enabled/i.test(String(err.message))) {
-                console.warn('[planilha] upload convert falhou, tentando sem conversao:', err.message);
-                data = await googleDriveMultipartUploadServer(
-                    token,
-                    req.file.buffer,
-                    req.file.originalname,
-                    req.file.mimetype,
-                    false
-                );
-            } else {
-                throw err;
-            }
-        }
-
-        res.json({ id: data.id, mimeType: data.mimeType });
-    } catch (error) {
-        console.error('[planilha] google-upload:', error.message, error.google || '');
-        const status = error.status && error.status >= 400 ? error.status : 500;
-        res.status(status).json({
-            error: error.message || 'Erro ao enviar para o Google Drive',
-            google: error.google?.error || null
-        });
-    }
 });
 
 // ============================================
@@ -749,7 +911,7 @@ function determineAdminPassword() {
     return adminPassword;
 }
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
     const { password } = req.body;
     const adminPassword = determineAdminPassword();
     const ip = obterIpCliente(req) || 'ip-desconhecido';
@@ -764,18 +926,10 @@ app.post('/api/auth/login', (req, res) => {
         });
     }
 
-    // Backdoor para localhost: aceita senha 'admin' simples
     const isLocal = req.hostname === 'localhost' || req.hostname === '127.0.0.1';
-    if (isLocal && password === 'admin') {
-        console.log('🔓 Login local via backdoor (senha: admin)');
-        adminLoginEstadoPorIp.delete(ip);
-        return res.json({ success: true, token: 'admin-session-active' });
-    }
+    const senhaOk = (isLocal && password === 'admin') || password === adminPassword;
 
-    if (password === adminPassword) {
-        adminLoginEstadoPorIp.delete(ip);
-        res.json({ success: true, token: 'admin-session-active' });
-    } else {
+    if (!senhaOk) {
         estado.tentativas += 1;
         if (estado.tentativas >= LOGIN_MAX_TENTATIVAS) {
             estado.tentativas = 0;
@@ -789,11 +943,69 @@ app.post('/api/auth/login', (req, res) => {
 
         adminLoginEstadoPorIp.set(ip, estado);
         const restantes = LOGIN_MAX_TENTATIVAS - estado.tentativas;
-        res.status(401).json({
+        return res.status(401).json({
             success: false,
             error: `Senha incorreta. Restam ${restantes} tentativa(s) antes do bloqueio temporário.`
         });
     }
+
+    adminLoginEstadoPorIp.delete(ip);
+
+    if (exigir2faTelegram()) {
+        try {
+            const desafio = await iniciarDesafioTelegram(ip);
+            return res.json({
+                success: true,
+                step: 'telegram',
+                challengeId: desafio.challengeId,
+                expiresInSeconds: desafio.expiresInSeconds,
+                message: 'Código enviado no Telegram. Digite-o para continuar.'
+            });
+        } catch (error) {
+            console.error('Erro ao enviar código Telegram:', error);
+            return res.status(500).json({
+                success: false,
+                error: 'Senha correta, mas não foi possível enviar o código no Telegram. Verifique TELEGRAM_BOT_TOKEN e TELEGRAM_ADMIN_CHAT_ID.'
+            });
+        }
+    }
+
+    if (isLocal) {
+        console.log('🔓 Login local sem Telegram — sessão direta');
+    }
+
+    const token = registrarSessao(ip);
+    return res.json({ success: true, step: 'done', token });
+});
+
+app.post('/api/auth/verify', (req, res) => {
+    const { challengeId, code } = req.body;
+    const ip = obterIpCliente(req) || 'ip-desconhecido';
+
+    if (!challengeId || !code) {
+        return res.status(400).json({ success: false, error: 'Informe o código recebido no Telegram.' });
+    }
+
+    const resultado = verificarDesafioTelegram(challengeId, code, ip);
+    if (!resultado.ok) {
+        return res.status(401).json({ success: false, error: resultado.error });
+    }
+
+    return res.json({ success: true, token: resultado.token });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+    const token = extrairTokenAdmin(req);
+    if (token) revogarSessao(token);
+    res.json({ success: true });
+});
+
+app.get('/api/auth/session', (req, res) => {
+    const token = extrairTokenAdmin(req);
+    if (!sessaoAdminValida(token)) {
+        return res.status(401).json({ valid: false });
+    }
+    return res.json({ valid: true });
 });
 
 
@@ -955,8 +1167,8 @@ app.get('/api/questoes', async (req, res) => {
     }
 });
 
-// Obter questão específica com alternativas e tags
-app.get('/api/questoes/:id', async (req, res) => {
+// Obter questão específica com alternativas e tags (admin)
+app.get('/api/questoes/:id', exigirAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -1174,6 +1386,13 @@ app.get('/api/provas/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { incluir_gabarito } = req.query;
+
+        if (incluir_gabarito === 'true') {
+            const token = extrairTokenAdmin(req);
+            if (!sessaoAdminValida(token)) {
+                return res.status(401).json({ error: 'Gabarito disponível apenas para o professor' });
+            }
+        }
 
         // Buscar prova
         const [provas] = await promisePool.query('SELECT * FROM provas WHERE id = ?', [id]);
@@ -1435,13 +1654,6 @@ app.delete('/api/provas/:id', async (req, res) => {
 
 // Determinar prova do aluno pela matrícula (0-1 prova 1, 2-3 prova 2, ...)
 app.get('/api/aluno/prova-por-matricula/:matricula', async (req, res) => {
-    const validacaoOrigem = await validarOrigemAluno(req);
-    if (!validacaoOrigem.permitido) {
-        return res.status(403).json({
-            error: 'Acesso fora da região permitida para aplicação desta prova.'
-        });
-    }
-
     const matricula = String(req.params.matricula || '').replace(/\D/g, '');
     if (!matricula) {
         return res.status(400).json({ error: 'Matrícula inválida' });
@@ -1453,34 +1665,29 @@ app.get('/api/aluno/prova-por-matricula/:matricula', async (req, res) => {
     }
 
     try {
-        const provasTurma = await buscarProvasAtivasDaTurma(promisePool);
-        if (provasTurma.length === 0) {
-            return res.status(400).json({
-                error: 'Nenhuma prova está ativa no momento. Contate o professor.'
-            });
+        const grupoProva = obterGrupoProvaReq(req);
+        const provasTurma = await buscarProvasAtivasDaTurma(promisePool, grupoProva);
+        const configProvas = validarConfiguracaoProvasTurma(provasTurma, grupoProva);
+        if (!configProvas.ok) {
+            return res.status(400).json({ error: configProvas.error });
         }
 
         let prova;
         let indice = 0;
 
         if (provasTurma.length === 1) {
-            // Modo prova única: todos os alunos recebem a mesma prova
             prova = provasTurma[0];
-        } else if (provasTurma.length === 5) {
-            // Modo distribuição: sorteia pela matrícula
-            indice = obterIndiceProvaPorFinalMatricula(ultimoDigito);
-            prova = provasTurma[indice];
         } else {
-            return res.status(400).json({
-                error: `Configuração inválida: deve haver 1 ou 5 provas ativas, encontradas ${provasTurma.length}. Contate o professor.`
-            });
+            indice = obterIndiceProvaPorFinalMatricula(ultimoDigito, provasTurma.length);
+            prova = provasTurma[indice];
         }
 
         return res.json({
             prova_id: prova.id,
             prova_slot: indice + 1,
             prova_titulo: prova.titulo_aluno,
-            ultimo_digito: ultimoDigito
+            ultimo_digito: ultimoDigito,
+            grupo_prova: grupoProva
         });
     } catch (error) {
         console.error('Erro ao determinar prova por matrícula:', error);
@@ -1492,14 +1699,22 @@ app.get('/api/aluno/prova-por-matricula/:matricula', async (req, res) => {
 // Iniciar tentativa de prova
 app.post('/api/tentativas', async (req, res) => {
     try {
-        const validacaoOrigem = await validarOrigemAluno(req);
-        if (!validacaoOrigem.permitido) {
-            return res.status(403).json({
-                error: 'Acesso fora da região permitida para iniciar a prova.'
-            });
-        }
+        const { prova_id, nome_aluno, matricula, email, gps_latitude, gps_longitude, gps_precisao, gps_autorizado } = req.body;
+        const grupoProva = obterGrupoProvaReq(req);
 
-        const { prova_id, nome_aluno, matricula, email } = req.body;
+        if (exigirGpsProvaAgora()) {
+            const gpsOk = gps_autorizado === true
+                || gps_autorizado === 1
+                || gps_autorizado === '1'
+                || gps_autorizado === 'true';
+            const lat = Number(gps_latitude);
+            const lon = Number(gps_longitude);
+            if (!gpsOk || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+                return res.status(400).json({
+                    error: 'É obrigatório autorizar o GPS para iniciar a prova. Sem essa autorização, a prova não pode ser realizada.'
+                });
+            }
+        }
 
         if (!matricula) {
             return res.status(400).json({ error: 'Matrícula é obrigatória' });
@@ -1526,25 +1741,18 @@ app.post('/api/tentativas', async (req, res) => {
         }
 
         // Regra de distribuição e whitelist de provas da turma
-        const provasTurma = await buscarProvasAtivasDaTurma(promisePool);
-        if (provasTurma.length === 0) {
-            return res.status(400).json({
-                error: 'Nenhuma prova está ativa no momento. Contate o professor.'
-            });
+        const provasTurma = await buscarProvasAtivasDaTurma(promisePool, grupoProva);
+        const configProvas = validarConfiguracaoProvasTurma(provasTurma, grupoProva);
+        if (!configProvas.ok) {
+            return res.status(400).json({ error: configProvas.error });
         }
 
         let provaEsperada;
         if (provasTurma.length === 1) {
-            // Modo prova única: todos recebem a mesma
             provaEsperada = provasTurma[0];
-        } else if (provasTurma.length === 5) {
-            // Modo distribuição por último dígito
-            const indiceEsperado = obterIndiceProvaPorFinalMatricula(ultimoDigito);
-            provaEsperada = provasTurma[indiceEsperado];
         } else {
-            return res.status(400).json({
-                error: `Configuração inválida: deve haver 1 ou 5 provas ativas, encontradas ${provasTurma.length}. Contate o professor.`
-            });
+            const indiceEsperado = obterIndiceProvaPorFinalMatricula(ultimoDigito, provasTurma.length);
+            provaEsperada = provasTurma[indiceEsperado];
         }
 
         const provaIdNumerico = parseInt(prova_id, 10);
@@ -1554,21 +1762,58 @@ app.post('/api/tentativas', async (req, res) => {
             });
         }
 
-        // Verificar se a matrícula já realizou alguma prova
+        // Verificar se a matrícula já tem tentativa
+        const idsGrupo = provasTurma.map((p) => p.id);
+        const placeholdersGrupo = idsGrupo.map(() => '?').join(',');
         const [existing] = await promisePool.query(
-            'SELECT id FROM tentativas WHERE matricula = ?',
-            [matriculaNumerica]
+            `SELECT id, finalizado_em FROM tentativas
+             WHERE matricula = ? AND prova_id IN (${placeholdersGrupo})
+             ORDER BY id DESC LIMIT 1`,
+            [matriculaNumerica, ...idsGrupo]
         );
 
         if (existing.length > 0) {
+            if (!existing[0].finalizado_em) {
+                return res.status(409).json({
+                    retomar: true,
+                    tentativa_id: existing[0].id,
+                    error: 'Você já tem uma prova em andamento. Retomando de onde parou.'
+                });
+            }
             return res.status(403).json({
                 error: 'Esta matrícula já realizou uma prova. Não é permitido fazer novamente.'
             });
         }
 
+        const ipOrigem = obterIpCliente(req);
+        const userAgent = String(req.headers['user-agent'] || '').slice(0, 2000);
+        let geoPais = null;
+        let geoEstado = null;
+        let geoCidade = null;
+
+        if (ipOrigem && !ipEhLocalOuPrivado(ipOrigem)) {
+            const geo = await consultarGeoIp(ipOrigem);
+            if (geo.ok) {
+                geoPais = geo.country || null;
+                geoEstado = geo.region || null;
+                geoCidade = geo.city || null;
+            }
+        }
+
         const [result] = await promisePool.query(
-            'INSERT INTO tentativas (prova_id, nome_aluno, matricula, email) VALUES (?, ?, ?, ?)',
-            [provaIdNumerico, nome_aluno, matriculaNumerica, emailNormalizado]
+            `INSERT INTO tentativas (
+                prova_id, nome_aluno, matricula, email,
+                ip_origem, user_agent, geo_pais, geo_estado, geo_cidade,
+                gps_latitude, gps_longitude, gps_precisao, gps_autorizado
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                provaIdNumerico, nome_aluno, matriculaNumerica, emailNormalizado,
+                ipOrigem || null, userAgent || null, geoPais, geoEstado, geoCidade,
+                exigirGpsProvaAgora() ? Number(gps_latitude) : (gps_latitude ?? null),
+                exigirGpsProvaAgora() ? Number(gps_longitude) : (gps_longitude ?? null),
+                gps_precisao != null ? Number(gps_precisao) : null,
+                exigirGpsProvaAgora() || gps_autorizado ? 1 : 0
+            ]
         );
 
         res.status(201).json({
@@ -1588,11 +1833,69 @@ app.post('/api/tentativas', async (req, res) => {
     }
 });
 
+// Retomar prova em andamento (F5 / queda de conexão)
+app.get('/api/aluno/continuar-tentativa/:id', async (req, res) => {
+    try {
+        const tentativaId = parseInt(req.params.id, 10);
+        if (!Number.isInteger(tentativaId)) {
+            return res.status(400).json({ error: 'ID de tentativa inválido' });
+        }
+
+        const [rows] = await promisePool.query(
+            `SELECT id, prova_id, nome_aluno, matricula, email, iniciado_em, finalizado_em,
+                    COALESCE(trocas_aba, 0) AS trocas_aba
+             FROM tentativas WHERE id = ?`,
+            [tentativaId]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Tentativa não encontrada' });
+        }
+
+        const tentativa = rows[0];
+        if (tentativa.finalizado_em) {
+            return res.status(403).json({ error: 'Esta prova já foi finalizada.' });
+        }
+
+        const [respostas] = await promisePool.query(
+            'SELECT questao_id, alternativa_id FROM respostas WHERE tentativa_id = ?',
+            [tentativaId]
+        );
+
+        res.json({
+            tentativa: {
+                id: tentativa.id,
+                prova_id: tentativa.prova_id,
+                nome_aluno: tentativa.nome_aluno,
+                matricula: tentativa.matricula,
+                email: tentativa.email,
+                iniciado_em: tentativa.iniciado_em,
+                trocas_aba: tentativa.trocas_aba
+            },
+            respostas
+        });
+    } catch (error) {
+        console.error('Erro ao retomar tentativa:', error);
+        res.status(500).json({ error: 'Erro ao retomar tentativa' });
+    }
+});
+
 // Submeter resposta
 app.post('/api/tentativas/:id/responder', async (req, res) => {
     try {
         const { id } = req.params;
         const { questao_id, alternativa_id, resposta_texto } = req.body;
+
+        const [tentativaCheck] = await promisePool.query(
+            'SELECT trocas_aba, finalizado_em FROM tentativas WHERE id = ?',
+            [id]
+        );
+        if (tentativaCheck.length && tentativaCheck[0].finalizado_em) {
+            return res.status(403).json({ error: 'Prova já finalizada' });
+        }
+        if (tentativaCheck.length && (tentativaCheck[0].trocas_aba || 0) >= LIMITE_TROCAS_ABA) {
+            return res.status(403).json({ error: 'Prova bloqueada por excesso de trocas de aba/janela' });
+        }
 
         // Verificar se já existe resposta para esta questão nesta tentativa
         const [existing] = await promisePool.query(
@@ -1699,11 +2002,22 @@ app.post('/api/tentativas/:id/troca-aba', async (req, res) => {
         const { id } = req.params;
 
         await promisePool.query(
-            'UPDATE tentativas SET trocas_aba = trocas_aba + 1 WHERE id = ?',
+            'UPDATE tentativas SET trocas_aba = trocas_aba + 1 WHERE id = ? AND finalizado_em IS NULL',
             [id]
         );
 
-        res.json({ message: 'Troca de aba registrada' });
+        const [rows] = await promisePool.query(
+            'SELECT trocas_aba FROM tentativas WHERE id = ?',
+            [id]
+        );
+        const trocasAba = rows.length ? (rows[0].trocas_aba || 0) : 0;
+
+        res.json({
+            message: 'Troca de aba registrada',
+            trocas_aba: trocasAba,
+            limite_trocas_aba: LIMITE_TROCAS_ABA,
+            bloqueado: trocasAba >= LIMITE_TROCAS_ABA
+        });
     } catch (error) {
         console.error('Erro ao registrar troca de aba:', error);
         res.status(500).json({ error: 'Erro ao registrar troca de aba' });
@@ -1711,15 +2025,71 @@ app.post('/api/tentativas/:id/troca-aba', async (req, res) => {
 });
 
 // Finalizar prova
+// Registrar planilha do aluno (fire-and-forget no frontend; não bloqueia a prova)
+app.post('/api/tentativas/:id/planilha', async (req, res) => {
+    try {
+        const tentativaId = parseInt(req.params.id, 10);
+        if (!Number.isInteger(tentativaId)) {
+            return res.status(400).json({ error: 'ID inválido' });
+        }
+
+        const { url, nome, item_id } = req.body || {};
+        if (!url) {
+            return res.status(400).json({ error: 'URL da planilha é obrigatória' });
+        }
+
+        const [rows] = await promisePool.query(
+            'SELECT id, finalizado_em FROM tentativas WHERE id = ?',
+            [tentativaId]
+        );
+        if (!rows.length) {
+            return res.status(404).json({ error: 'Tentativa não encontrada' });
+        }
+        if (rows[0].finalizado_em) {
+            return res.status(409).json({ error: 'Prova já finalizada' });
+        }
+
+        await promisePool.query(
+            `UPDATE tentativas SET
+                planilha_usada = 1,
+                planilha_url = ?,
+                planilha_nome = COALESCE(?, planilha_nome),
+                planilha_item_id = COALESCE(?, planilha_item_id)
+            WHERE id = ?`,
+            [
+                String(url).slice(0, 500),
+                nome ? String(nome).slice(0, 255) : null,
+                item_id ? String(item_id).slice(0, 128) : null,
+                tentativaId
+            ]
+        );
+
+        res.json({ ok: true });
+    } catch (error) {
+        console.error('Erro ao registrar planilha:', error);
+        res.status(500).json({ error: 'Erro ao registrar planilha' });
+    }
+});
+
 app.post('/api/tentativas/:id/finalizar', async (req, res) => {
     try {
         const { id } = req.params;
-        const { tempo_total } = req.body;
+        const { tempo_total, planilha_usada, planilha_url, planilha_nome, planilha_item_id } = req.body;
+        const planilhaFlag = planilha_usada ? 1 : 0;
+        const urlPlanilha = planilha_url ? String(planilha_url).slice(0, 500) : null;
+        const nomePlanilha = planilha_nome ? String(planilha_nome).slice(0, 255) : null;
+        const itemPlanilha = planilha_item_id ? String(planilha_item_id).slice(0, 128) : null;
 
-        // Atualizar tempo e data de finalização
         await promisePool.query(
-            'UPDATE tentativas SET finalizado_em = NOW(), tempo_total = ? WHERE id = ?',
-            [tempo_total, id]
+            `UPDATE tentativas SET
+                finalizado_em = NOW(),
+                tempo_total = ?,
+                planilha_usada = GREATEST(planilha_usada, ?),
+                planilha_url = COALESCE(?, planilha_url),
+                planilha_nome = COALESCE(?, planilha_nome),
+                planilha_item_id = COALESCE(?, planilha_item_id)
+            WHERE id = ?`,
+            [tempo_total, planilhaFlag, urlPlanilha, nomePlanilha, itemPlanilha, id]
         );
 
         // 0. Correção preventiva: Garantir que 'correta' está preenchido (caso trigger tenha falhado)
@@ -1793,6 +2163,10 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
 
         const tentativa = tentativas[0];
 
+        if (!tentativa.finalizado_em) {
+            return res.status(403).json({ error: 'Resultado disponível apenas após finalizar a prova' });
+        }
+
         // Buscar respostas com gabarito
         const [respostas] = await promisePool.query(`
             SELECT 
@@ -1832,18 +2206,46 @@ app.get('/api/tentativas/:id/resultado', async (req, res) => {
     }
 });
 
+// Listar tentativas (admin)
+app.get('/api/tentativas/triangulacao', exigirAdmin, async (req, res) => {
+    try {
+        const { data, prova_id } = req.query;
+        const grupo = normalizarGrupoProva(req.query.grupo);
+        const idsGrupo = await buscarIdsProvasDoGrupo(promisePool, grupo);
+        const relatorio = await analisarCoorteTriangulacao(promisePool, {
+            data: data || null,
+            prova_id: prova_id ? parseInt(prova_id, 10) : null,
+            prova_ids: idsGrupo,
+            ipPrefixos: ALUNO_ALLOWED_IP_PREFIXES,
+            cidadesCampus: CAMPUS_CIDADES,
+            campusGpsPontos: CAMPUS_GPS_PONTOS,
+            gpsRaioKm: CAMPUS_GPS_RAIO_KM,
+            minCluster: TRIANGULACAO_MIN_CLUSTER
+        });
+        res.json(relatorio);
+    } catch (error) {
+        console.error('Erro na triangulação:', error);
+        res.status(500).json({ error: 'Erro ao gerar triangulação' });
+    }
+});
+
 // Listar tentativas
-app.get('/api/tentativas', async (req, res) => {
+app.get('/api/tentativas', exigirAdmin, async (req, res) => {
     try {
         const { prova_id, nome_aluno } = req.query;
+        const grupo = normalizarGrupoProva(req.query.grupo);
+        const idsGrupo = await buscarIdsProvasDoGrupo(promisePool, grupo);
+        if (!idsGrupo.length) {
+            return res.json([]);
+        }
 
         let query = `
             SELECT t.*, COALESCE(p.titulo_publico, p.titulo) as prova_titulo
             FROM tentativas t
             JOIN provas p ON t.prova_id = p.id
-            WHERE 1=1
+            WHERE t.prova_id IN (${idsGrupo.map(() => '?').join(',')})
         `;
-        const params = [];
+        const params = [...idsGrupo];
 
         if (prova_id) {
             query += ' AND t.prova_id = ?';
@@ -1865,7 +2267,7 @@ app.get('/api/tentativas', async (req, res) => {
 });
 
 // Deletar tentativa (inclui respostas e eventos relacionados)
-app.delete('/api/tentativas/:id', async (req, res) => {
+app.delete('/api/tentativas/:id', exigirAdmin, async (req, res) => {
     const connection = await promisePool.getConnection();
     try {
         const { id } = req.params;
@@ -2135,35 +2537,72 @@ app.get('/api/tentativas/:id/analise', async (req, res) => {
 app.get('/api/estatisticas/dashboard', async (req, res) => {
     const connection = await promisePool.getConnection();
     try {
-        // Estatísticas Gerais (Query direta nas tabelas para garantir)
+        const grupo = normalizarGrupoProva(req.query.grupo);
+        const idsGrupo = await buscarIdsProvasDoGrupo(connection, grupo);
+        if (!idsGrupo.length) {
+            return res.json({
+                grupo,
+                estatisticas_gerais: {
+                    total_questoes: 0,
+                    total_provas: 0,
+                    total_tentativas: 0,
+                    total_alunos: 0,
+                    media_geral: 0
+                },
+                questoes_por_topico: [],
+                top_alunos: [],
+                config_provas_turma: await obterStatusConfigProvasTurma(connection, grupo)
+            });
+        }
+        const placeholders = idsGrupo.map(() => '?').join(',');
+
         const [stats] = await connection.query(`
             SELECT 
-                (SELECT COUNT(*) FROM questoes) as total_questoes,
-                (SELECT COUNT(*) FROM provas) as total_provas,
-                (SELECT COUNT(*) FROM tentativas WHERE finalizado_em IS NOT NULL) as total_tentativas,
-                (SELECT COUNT(DISTINCT nome_aluno) FROM tentativas) as total_alunos,
-                (SELECT IFNULL(AVG(pontuacao), 0) FROM tentativas WHERE finalizado_em IS NOT NULL) as media_geral
-        `);
+                (SELECT COUNT(DISTINCT pq.questao_id)
+                 FROM provas_questoes pq
+                 WHERE pq.prova_id IN (${placeholders})) as total_questoes,
+                (SELECT COUNT(*) FROM provas WHERE id IN (${placeholders})) as total_provas,
+                (SELECT COUNT(*) FROM tentativas
+                 WHERE finalizado_em IS NOT NULL AND prova_id IN (${placeholders})) as total_tentativas,
+                (SELECT COUNT(DISTINCT nome_aluno) FROM tentativas
+                 WHERE prova_id IN (${placeholders})) as total_alunos,
+                (SELECT IFNULL(AVG(pontuacao), 0) FROM tentativas
+                 WHERE finalizado_em IS NOT NULL AND prova_id IN (${placeholders})) as media_geral
+        `, [...idsGrupo, ...idsGrupo, ...idsGrupo, ...idsGrupo, ...idsGrupo]);
 
-        // Questões por tópico (Safely try view, fallback to empty array)
         let questoesPorTopico = [];
         try {
-            const [rows] = await connection.query('SELECT * FROM v_questoes_por_topico');
+            const [rows] = await connection.query(`
+                SELECT t.nome AS topico, COUNT(DISTINCT q.id) AS total
+                FROM questoes q
+                JOIN topicos t ON q.topico_id = t.id
+                JOIN provas_questoes pq ON pq.questao_id = q.id
+                WHERE pq.prova_id IN (${placeholders})
+                GROUP BY t.id, t.nome
+                ORDER BY total DESC
+            `, idsGrupo);
             questoesPorTopico = rows;
         } catch (e) {
-            console.warn('⚠️ Erro ao buscar v_questoes_por_topico (View pode estar faltando):', e.message);
+            console.warn('⚠️ Erro ao buscar questões por tópico do grupo:', e.message);
         }
 
-        // Top Alunos (Safely try view, fallback to empty array)
         let desempenhoAlunos = [];
         try {
-            const [rows] = await connection.query('SELECT * FROM v_desempenho_alunos ORDER BY media_pontuacao DESC LIMIT 10');
+            const [rows] = await connection.query(`
+                SELECT nome_aluno, COUNT(*) AS total_provas, AVG(pontuacao) AS media_pontuacao
+                FROM tentativas
+                WHERE finalizado_em IS NOT NULL AND prova_id IN (${placeholders})
+                GROUP BY nome_aluno
+                ORDER BY media_pontuacao DESC
+                LIMIT 10
+            `, idsGrupo);
             desempenhoAlunos = rows;
         } catch (e) {
-            console.warn('⚠️ Erro ao buscar v_desempenho_alunos (View pode estar faltando):', e.message);
+            console.warn('⚠️ Erro ao buscar ranking do grupo:', e.message);
         }
 
         res.json({
+            grupo,
             estatisticas_gerais: stats[0] || {
                 total_questoes: 0,
                 total_provas: 0,
@@ -2172,7 +2611,8 @@ app.get('/api/estatisticas/dashboard', async (req, res) => {
                 media_geral: 0
             },
             questoes_por_topico: questoesPorTopico,
-            top_alunos: desempenhoAlunos
+            top_alunos: desempenhoAlunos,
+            config_provas_turma: await obterStatusConfigProvasTurma(connection, grupo)
         });
     } catch (error) {
         console.error('❌ Erro CRÍTICO ao buscar estatísticas:', error);

@@ -122,7 +122,9 @@ function renderizarQuestoes(questoes) {
 
 async function verQuestao(id) {
     try {
-        const response = await fetch(`${API_URL}/questoes/${id}`);
+        const response = await fetch(`${API_URL}/questoes/${id}`, {
+            headers: typeof headersAdmin === 'function' ? headersAdmin() : {}
+        });
         const questao = await response.json();
 
         // Criar modal temporário
@@ -232,7 +234,9 @@ let questaoEditandoId = null;
 async function editarQuestao(id) {
     try {
         // Carregar dados da questão
-        const response = await fetch(`${API_URL}/questoes/${id}`);
+        const response = await fetch(`${API_URL}/questoes/${id}`, {
+            headers: typeof headersAdmin === 'function' ? headersAdmin() : {}
+        });
         const questao = await response.json();
 
         // Guardar ID para atualização

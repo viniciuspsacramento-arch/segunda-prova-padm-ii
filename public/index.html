@@ -5,34 +5,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Banco de Questões de Estatística</title>
-    <link rel="stylesheet" href="/css/styles.css?v=17">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simplebar@6.2.7/dist/simplebar.min.css">
-    <!-- KaTeX for Math Rendering -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
-        integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
-        integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vniwctQqWmjS97"
-        crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
-        integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05"
-        crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="/css/styles.css?v=36">
+    <link rel="stylesheet" href="/vendor/simplebar/simplebar.min.css">
+    <link rel="stylesheet" href="/vendor/katex/katex.min.css">
 
     <!-- Script de detecção de modo - executa ANTES de renderizar o body -->
     <!-- Script de detecção de modo removido para evitar tela branca. O controle será feito via CSS/JS no app.js -->
     <script>
-        // Apenas marca o modo no body para CSS
         (function () {
             var isAdmin = window.location.search.indexOf('admin') !== -1;
             if (isAdmin) {
                 document.documentElement.classList.add('mode-admin');
+                document.addEventListener('DOMContentLoaded', function () {
+                    document.body.classList.add('mode-admin-locked');
+                });
             } else {
                 document.documentElement.classList.add('mode-aluno');
             }
         })();
     </script>
+    <style>
+        /* Só esconde o painel enquanto o login admin não foi concluído */
+        html.mode-admin body.mode-admin-locked .page,
+        html.mode-admin body.mode-admin-locked #mainNav,
+        html.mode-admin body.mode-admin-locked > header,
+        html.mode-admin body.mode-admin-locked > .container {
+            display: none !important;
+        }
+
+        html.mode-admin body.mode-admin-locked #modalLogin {
+            display: flex !important;
+        }
+
+        body.mode-admin:not(.mode-admin-locked) #modalLogin {
+            display: none !important;
+        }
+    </style>
 </head>
 
 <body>
+    <script>
+        if (window.location.search.indexOf('admin') !== -1) {
+            document.body.classList.add('mode-admin-locked');
+        }
+    </script>
     <!-- Header -->
     <header>
         <div class="header-content">
@@ -67,7 +83,7 @@
     <!-- Container Principal -->
     <div class="container">
         <!-- Página: Dashboard -->
-        <div id="page-dashboard" class="page active">
+        <div id="page-dashboard" class="page hidden">
             <h2 class="mb-3">Dashboard</h2>
 
             <div class="stats-grid" id="statsGrid">
@@ -163,6 +179,15 @@
             <div id="selecionarProva">
                 <h2 class="mb-3">Selecionar Prova</h2>
 
+                <div id="avisoConexaoAluno" class="card mb-3 hidden" style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35);">
+                    <p style="margin: 0 0 0.5rem 0; color: var(--error); font-weight: 600;">Problema de conexão</p>
+                    <p style="margin: 0 0 0.75rem 0; color: var(--text-secondary); font-size: 0.92rem; line-height: 1.5;">
+                        Se aparecer <strong>“Conexão não é privada”</strong>, clique <strong>Avançado → Continuar</strong>.
+                        Use <strong>https://</strong>. Se persistir, tente <strong>4G/dados móveis</strong>.
+                    </p>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="verificarConexaoAluno()">Tentar novamente</button>
+                </div>
+
                 <div class="card mb-3">
                     <div class="form-group mb-3">
                         <label class="form-label" for="nomeAluno">Nome Completo</label>
@@ -184,9 +209,29 @@
 
                     <div class="card mb-4" style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25);">
                         <p style="margin: 0; color: var(--text-secondary); font-size: 0.95rem;">
-                            Durante a prova você poderá conectar sua conta <strong>Google</strong> ou <strong>Microsoft</strong>
-                            e usar Google Sheets ou Excel Online sem sair desta página.
+                            Durante a prova você poderá conectar sua conta <strong>Microsoft</strong>
+                            e usar <strong>Excel Online</strong> sem sair desta página.
                         </p>
+                    </div>
+
+                    <div class="card mb-4" style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.35);">
+                        <p style="margin: 0 0 0.5rem 0; color: #166534; font-weight: 600;">📍 Localização (GPS)</p>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.92rem; line-height: 1.6;">
+                            Para iniciar a prova, você precisará <strong>autorizar o GPS</strong> do dispositivo.
+                            A localização é usada <strong>apenas para triangulação</strong> (análise sala/remoto pelo professor)
+                            e <strong>não bloqueia</strong> sua prova durante a realização.
+                        </p>
+                    </div>
+
+                    <div class="card mb-4" style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35);">
+                        <p style="margin: 0 0 0.5rem 0; color: var(--error); font-weight: 600;">⚠️ Atenção — Proteções anti-cópia ativas</p>
+                        <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-secondary); font-size: 0.92rem; line-height: 1.6;">
+                            <li>Clique direito, copiar/colar e atalhos de teclado estão <strong>desabilitados</strong> nas questões — exceto <strong>cópia dos dados das tabelas</strong> (para colar na planilha).</li>
+                            <li>Trocar de aba no navegador é <strong>registrado automaticamente</strong>.</li>
+                            <li>Pressionar a tecla <strong>PrintScreen (PrtSc)</strong> também conta como uma saída.</li>
+                            <li>Ao atingir <strong>3 saídas da aba/janela</strong>, a prova é <strong>bloqueada e finalizada automaticamente</strong>, mesmo que não tenha terminado.</li>
+                            <li>Abrir o Excel Online pela ferramenta integrada da prova <strong>não conta</strong> como saída de aba.</li>
+                        </ul>
                     </div>
 
                     <button class="btn btn-primary w-100" onclick="acessarProvaPorMatricula()">
@@ -207,11 +252,39 @@
         <div id="page-historico" class="page hidden">
             <h2 class="mb-3">Histórico de Tentativas</h2>
 
+            <div id="cardGpsEmergencia" class="card mb-3" style="border: 1px solid rgba(234, 179, 8, 0.45); background: rgba(234, 179, 8, 0.06);">
+                <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
+                    <div>
+                        <p style="margin: 0 0 0.35rem; font-weight: 600;">GPS na prova</p>
+                        <p id="gpsEmergenciaStatus" style="margin: 0; color: var(--text-secondary); font-size: 0.92rem;">
+                            Verificando...
+                        </p>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <button type="button" id="btnGpsEmergenciaDesligar" class="btn btn-danger" onclick="alternarGpsEmergencia(true)" style="display: none;">
+                            Desligar GPS (emergência)
+                        </button>
+                        <button type="button" id="btnGpsEmergenciaLigar" class="btn btn-primary" onclick="alternarGpsEmergencia(false)" style="display: none;">
+                            Reativar GPS
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="card mb-3">
                 <div class="form-group">
                     <label class="form-label">Buscar por Nome</label>
                     <input type="text" id="buscarAluno" class="form-input" placeholder="Nome do aluno"
                         onkeyup="filtrarHistorico()">
+                </div>
+                <div class="form-group" style="display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end;">
+                    <div>
+                        <label class="form-label" for="triangulacaoData">Triangulação — data da prova</label>
+                        <input type="date" id="triangulacaoData" class="form-input">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="abrirTriangulacao()">
+                        Triangulação sala / remoto
+                    </button>
                 </div>
             </div>
 
@@ -225,9 +298,9 @@
                                 <th>Data</th>
                                 <th>Pontuação</th>
                                 <th title="Campo informativo: nesta prova é permitido consultar slides e Excel.">Navegações fora da prova (info)</th>
-                                <th title="Tentativas de compartilhar a planilha (Google) durante a prova">Compartilhamento</th>
+                                <th>Compartilhamento</th>
                                 <th>Tempo</th>
-                                <th>Ações</th>
+                                <th>Planilha / Ações</th>
                             </tr>
                         </thead>
                         <tbody id="tabelaHistorico">
@@ -437,6 +510,45 @@
         </div>
     </div>
 
+    <!-- Modal: Triangulação -->
+    <div id="modalTriangulacao" class="modal">
+        <div class="modal-content" style="max-width: 960px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Triangulação — sala vs remoto</h3>
+                <button class="modal-close" onclick="fecharModal('modalTriangulacao')">&times;</button>
+            </div>
+            <div id="triangulacaoContent"></div>
+        </div>
+    </div>
+
+    <!-- Modal: Consentimento GPS -->
+    <div id="modalGpsProva" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Autorização de GPS</h3>
+            </div>
+            <div style="padding: 0 0.25rem 1rem;">
+                <p style="line-height: 1.6; color: var(--text-secondary);">
+                    Esta prova solicita o uso do <strong>GPS do seu dispositivo</strong> para fins de
+                    <strong>triangulação</strong> (análise posterior pelo professor sobre realização em sala ou remoto).
+                </p>
+                <p style="line-height: 1.6; color: var(--text-secondary);">
+                    O GPS <strong>não interrompe</strong> a prova nem bloqueia seu acesso durante a realização.
+                    Porém, <strong>sem autorizar o GPS você não poderá iniciar a prova</strong>.
+                </p>
+                <p id="gpsProvaStatus" class="text-muted" style="margin-top: 0.75rem; display: none;"></p>
+            </div>
+            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                <button type="button" id="btnGpsAutorizo" class="btn btn-primary" style="flex: 1;">
+                    Autorizo o uso do GPS
+                </button>
+                <button type="button" id="btnGpsNego" class="btn btn-secondary" style="flex: 1;">
+                    Não autorizo
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: Resultado da Prova -->
     <div id="modalResultado" class="modal">
         <div class="modal-content" style="max-width: 800px;">
@@ -456,27 +568,57 @@
         <div class="modal-content" style="max-width: 400px; text-align: center;">
             <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
             <h2 class="mb-3">Área Restrita</h2>
-            <p class="text-muted mb-4">Digite a senha de administrador para continuar.</p>
 
             <form id="formLogin" onsubmit="realizarLogin(event)">
-                <div class="form-group mb-3">
-                    <input type="password" id="senhaAdmin" class="form-input" placeholder="Senha" required autofocus>
+                <div id="loginStepSenha">
+                    <p class="text-muted mb-4">Digite a senha de administrador para continuar.</p>
+                    <div class="form-group mb-3">
+                        <input type="password" id="senhaAdmin" class="form-input" placeholder="Senha" required autofocus>
+                    </div>
+                    <button type="submit" id="btnLoginSenha" class="btn btn-primary w-100">
+                        Continuar
+                    </button>
                 </div>
-                <div id="loginError" class="text-danger mb-3" style="display: none;">Senha incorreta</div>
-                <button type="submit" class="btn btn-primary w-100">
-                    Entrar
-                </button>
+
+                <div id="loginStepTelegram" class="hidden">
+                    <p class="text-muted mb-4">Enviamos um código de 6 dígitos no seu Telegram. Digite abaixo.</p>
+                    <div class="form-group mb-3">
+                        <input type="text" id="codigoTelegram" class="form-input" placeholder="000000"
+                            inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code">
+                    </div>
+                    <button type="button" id="btnVerificarCodigo" class="btn btn-primary w-100 mb-2" onclick="verificarCodigoTelegram()">
+                        Verificar código
+                    </button>
+                    <button type="button" class="btn btn-secondary w-100 btn-sm" onclick="voltarLoginSenha()">
+                        ← Voltar
+                    </button>
+                </div>
+
+                <div id="loginError" class="text-danger mb-3 mt-3" style="display: none;">Senha incorreta</div>
             </form>
         </div>
     </div>
 
-    <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/simplebar@6.2.7/dist/simplebar.min.js"></script>
-    <script src="/js/app.js?v=23"></script>
-    <script src="/js/questoes.js?v=23"></script>
-    <script src="/js/provas.js?v=23"></script>
-    <script src="/js/ferramentas-prova.js?v=9"></script>
-    <script src="/js/realizar-prova.js?v=25"></script>
+    <!-- Scripts — aluno carrega só o necessário para a prova -->
+    <script src="/vendor/simplebar/simplebar.min.js" defer></script>
+    <script src="/vendor/katex/katex.min.js" defer></script>
+    <script src="/vendor/katex/auto-render.min.js" defer></script>
+    <script src="/js/grupos-prova.js?v=2"></script>
+    <script src="/js/app.js?v=42" defer></script>
+    <script src="/js/ferramentas-prova.js?v=56" defer></script>
+    <script src="/js/materiais-consulta.js?v=11" defer></script>
+    <script src="/js/realizar-prova.js?v=52" defer></script>
+    <script defer>
+        (function () {
+            if (window.location.search.indexOf('admin') === -1) return;
+            ['questoes.js?v=24', 'provas.js?v=24'].forEach(function (file) {
+                var s = document.createElement('script');
+                s.src = '/js/' + file;
+                s.defer = true;
+                document.body.appendChild(s);
+            });
+        })();
+    </script>
 </body>
 
 </html>

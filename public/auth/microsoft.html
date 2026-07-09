@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Login Microsoft</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 24px;
+            background: #111827;
+            color: #e5e7eb;
+            margin: 0;
+        }
+        p { line-height: 1.5; }
+        button {
+            margin-top: 16px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 8px;
+            border: none;
+            background: #6366f1;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <h2 id="titulo">Conectando conta Microsoft…</h2>
+    <p id="mensagem">Aguarde. Não feche esta janela.</p>
+
+    <script>
+        const MSAL_SCRIPT_URLS = ['/vendor/msal/msal-browser.min.js', '/js/msal-browser.min.js'];
+        const PLANILHA_RETORNO_URL_KEY = 'planilhaRetornoUrl';
+
+        function carregarScript(src) {
+            return new Promise((resolve, reject) => {
+                const existente = document.querySelector('script[src="' + src + '"]');
+                if (existente && existente.dataset.loaded === '1') {
+                    resolve();
+                    return;
+                }
+                const script = document.createElement('script');
+                script.src = src;
+                script.async = true;
+                script.onload = function () {
+                    script.dataset.loaded = '1';
+                    resolve();
+                };
+                script.onerror = function () { reject(new Error('Falha ao carregar MSAL')); };
+                document.head.appendChild(script);
+            });
+        }
+
+        async function carregarMsalBrowser() {
+            if (window.msal && window.msal.PublicClientApplication) return;
+            let ultimoErro = null;
+            for (const url of MSAL_SCRIPT_URLS) {
+                try {
+                    await carregarScript(url);
+                    if (window.msal && window.msal.PublicClientApplication) return;
+                } catch (error) {
+                    ultimoErro = error;
+                }
+            }
+            throw ultimoErro || new Error('Biblioteca MSAL indisponível.');
+        }
+
+        function obterUrlRetorno() {
+            let destino = '/';
+            try {
+                destino = sessionStorage.getItem(PLANILHA_RETORNO_URL_KEY) || '/';
+            } catch (_) {
+                // ignora
+            }
+            return destino;
+        }
+
+        function voltarParaProva() {
+            window.location.replace(obterUrlRetorno());
+        }
+
+        function finalizarComSucesso() {
+            document.getElementById('titulo').textContent = 'Conta Microsoft conectada';
+            document.getElementById('mensagem').textContent = 'Redirecionando de volta para a prova...';
+            voltarParaProva();
+        }
+
+        function finalizarComErro(mensagem) {
+            document.getElementById('titulo').textContent = 'Erro no login Microsoft';
+            document.getElementById('mensagem').textContent = mensagem;
+            const btn = document.createElement('button');
+            btn.textContent = 'Voltar para a prova';
+            btn.onclick = voltarParaProva;
+            document.body.appendChild(btn);
+        }
+
+        async function iniciar() {
+            try {
+                const configResp = await fetch('/api/config/ferramentas');
+                const config = await configResp.json();
+                if (!config.microsoftClientId) {
+                    throw new Error('Integração Microsoft não configurada no servidor.');
+                }
+
+                await carregarMsalBrowser();
+
+                const redirectUriFinal = config.microsoftRedirectUri || (window.location.origin + '/auth/microsoft.html');
+
+                const msalInstance = new msal.PublicClientApplication({
+                    auth: {
+                        clientId: config.microsoftClientId,
+                        authority: 'https://login.microsoftonline.com/' + (config.microsoftTenantId || 'common'),
+                        redirectUri: redirectUriFinal,
+                        postLogoutRedirectUri: redirectUriFinal
+                    },
+                    cache: { cacheLocation: 'localStorage' },
+                    system: { allowNativeBroker: false }
+                });
+
+                await msalInstance.initialize();
+
+                const redirectResult = await msalInstance.handleRedirectPromise();
+                if (redirectResult && redirectResult.account) {
+                    msalInstance.setActiveAccount(redirectResult.account);
+                    finalizarComSucesso();
+                    return;
+                }
+
+                if (msalInstance.getAllAccounts().length > 0) {
+                    finalizarComSucesso();
+                    return;
+                }
+
+                // Chegou aqui sem resultado de redirecionamento e sem conta —
+                // provavelmente o usuário abriu esta página diretamente.
+                // Volta para a prova; lá o fluxo normal decide o que fazer.
+                finalizarComSucesso();
+            } catch (error) {
+                console.error(error);
+                finalizarComErro(error.message || 'Não foi possível conectar à Microsoft.');
+            }
+        }
+
+        iniciar();
+    </script>
+</body>
+</html>
